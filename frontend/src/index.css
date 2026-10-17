@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+body {
+  background: #0f172a;
+  color: #f1f5f9;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keep Leaflet below modals */
+.leaflet-container { background: #0f172a !important; z-index: 10 !important; }
+.leaflet-pane      { z-index: 10 !important; }
+.leaflet-top,
+.leaflet-bottom    { z-index: 15 !important; }
+
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #1e293b; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+@keyframes pulseRed {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-red { animation: pulseRed 1s infinite; }
+
+@keyframes slideIn {
+  from { transform: translateY(-8px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.slide-in { animation: slideIn 0.25s ease-out; }
