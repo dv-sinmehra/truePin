@@ -691,10 +691,34 @@ def simulate_scenario(scenario: str):
             REPORTS.append(proc)
             results.append(proc)
 
+    elif scenario == 'new_account_sos':
+        # New account (7 days old) on mobile ISP with decent kinematics.
+        # base_trust = 40 (age < 30) → 0.4*40=16 + L1(+25+20)=45 → raw≈61 → SOFT_ALERT
+        for i in range(4):
+            rep = Report(
+                report_id=f"rep_newacct_{uuid.uuid4().hex[:8]}",
+                timestamp=now + (i * 0.3),
+                user_id=f"new_user_{uuid.uuid4().hex[:6]}",
+                account_age_days=7,   # Very new account — trust=40, not 65
+                lat=28.6315 + random.uniform(-0.003, 0.003),
+                lng=77.2167 + random.uniform(-0.003, 0.003),
+                report_type='UNSAFE_HARASSMENT',
+                ip_address=f'49.205.{random.randint(10, 50)}.{random.randint(2, 250)}',
+                asn_type='MOBILE_ISP',
+                device_hash=str(uuid.uuid4())[:8],
+                kinematic_variance=random.uniform(0.5, 1.5),  # Valid kinematics
+                has_gps_breadcrumbs=True,
+                approach_speed_kmh=random.uniform(3.0, 8.0),
+                is_ground_truth_fake=False  # Genuine user — just new
+            )
+            proc = process_report(rep)
+            REPORTS.append(proc)
+            results.append(proc)
+
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown scenario '{scenario}'. Available scenarios: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift."
+            detail=f"Unknown scenario '{scenario}'. Available scenarios: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift, new_account_sos."
         )
 
     # Refresh metrics after simulation batch
