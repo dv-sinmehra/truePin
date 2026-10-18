@@ -6,6 +6,9 @@ import SimulatorPanel from './components/SimulatorPanel.jsx'
 import Firehose from './components/Firehose.jsx'
 import XRayInspector from './components/XRayInspector.jsx'
 import CustomReportModal from './components/CustomReportModal.jsx'
+import BenchmarkModal from './components/BenchmarkModal.jsx'
+import UseCasesModal from './components/UseCasesModal.jsx'
+
 
 // In production: set VITE_API_URL to your Render backend URL
 // In development: falls back to localhost:8000
@@ -18,6 +21,9 @@ export default function App() {
   const [selectedReport, setSelectedReport] = useState(null)
   const [loading, setLoading] = useState({})
   const [showCustom, setShowCustom] = useState(false)
+  const [showBenchmark, setShowBenchmark] = useState(false)
+  const [showUseCases, setShowUseCases] = useState(false)
+
   const [connected, setConnected] = useState(false)
   const intervalRef = useRef(null)
 
@@ -130,12 +136,26 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <button
+            onClick={() => setShowBenchmark(true)}
+            className="flex items-center gap-1 bg-violet-900 hover:bg-violet-800 border border-violet-700 text-violet-200 text-[10px] font-semibold px-2 py-1 rounded-lg transition"
+          >
+            📊 Dataset Reliability Benchmark
+          </button>
+          <button
+            onClick={() => setShowUseCases(true)}
+            className="flex items-center gap-1 bg-blue-900 hover:bg-blue-800 border border-blue-700 text-blue-200 text-[10px] font-semibold px-2 py-1 rounded-lg transition"
+          >
+            🔌 Real-World Use Cases &amp; API
+          </button>
+          <span className="text-[9px] font-semibold bg-yellow-500 text-black px-1.5 py-0.5 rounded animate-pulse">★ Mentor Feedback Added</span>
           <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
           <span className={`text-xs ${connected ? 'text-emerald-400' : 'text-red-400'}`}>
             {connected ? 'Backend Connected' : 'Connecting to :8000...'}
           </span>
         </div>
+
       </div>
 
       {/* ── KPI Telemetry Bar ───────────────────────────────── */}
@@ -198,6 +218,17 @@ export default function App() {
           />
         </div>
       )}
+
+      {/* ── Benchmark Modal ────────────────────────────────── */}
+      {showBenchmark && (
+        <BenchmarkModal onClose={() => setShowBenchmark(false)} />
+      )}
+
+      {/* ── Use Cases Modal ───────────────────────────────── */}
+      {showUseCases && (
+        <UseCasesModal onClose={() => setShowUseCases(false)} />
+      )}
     </div>
   )
 }
+
