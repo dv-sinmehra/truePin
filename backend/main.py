@@ -762,10 +762,18 @@ out body;
     if not HTTPX_AVAILABLE:
         return {'source': 'fallback', 'nodes': FALLBACK_NODES, 'count': len(FALLBACK_NODES)}
 
+    query_str = overpass_query.strip()
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'truePin-AEGIS-MAP/1.0 (educational project)',
+    }
+
     try:
-        resp = httpx.post(
+        # Try GET first (more widely accepted by Overpass mirrors)
+        resp = httpx.get(
             'https://overpass-api.de/api/interpreter',
-            data={'data': overpass_query},
+            params={'data': query_str},
+            headers=headers,
             timeout=12.0,
         )
         resp.raise_for_status()
