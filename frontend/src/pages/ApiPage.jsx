@@ -228,6 +228,79 @@ export default function ApiPage() {
       </div>
 
       <div className="h-4" />
+
+      {/* ── Revenue Model ─────────────────────────────────────────────── */}
+      <div>
+        <div className="text-xs font-bold text-slate-300 mb-1">💰 B2B SaaS Revenue Model & Unit Economics</div>
+        <div className="text-[10px] text-slate-500 mb-3">
+          truePin exposes its trust-verification pipeline as a plug-and-play REST API. Three justified pricing tiers
+          targeting civic tech, consumer safety apps, and smart-city enterprise contracts.
+        </div>
+        <div className="grid grid-cols-1 gap-3">
+
+          {/* Tier 1 */}
+          <div className="bg-slate-800/60 border border-slate-600 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-sm font-bold text-white">🏫 Tier 1 — Civic & Campus Starter</span>
+              <span className="text-xs font-bold text-emerald-400 bg-emerald-950 border border-emerald-700 px-2 py-0.5 rounded-full">₹14,999 / month</span>
+              <span className="text-[9px] text-slate-400">≈ $180/mo</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+              <div>✅ Up to <strong className="text-slate-200">50,000 verifications/mo</strong></div>
+              <div>📍 Unit economics: <strong className="text-slate-200">₹0.30 / pin</strong></div>
+              <div>🎯 Target: Campus SOS apps, NGOs, RWAs</div>
+              <div>🔌 REST API access + JSON response</div>
+              <div>📊 Basic analytics dashboard</div>
+              <div>📧 Email support, 72hr SLA</div>
+            </div>
+          </div>
+
+          {/* Tier 2 */}
+          <div className="bg-violet-950/40 border border-violet-700 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-sm font-bold text-white">🗺️ Tier 2 — Navigation & Safety Apps</span>
+              <span className="text-xs font-bold text-violet-300 bg-violet-900 border border-violet-700 px-2 py-0.5 rounded-full">₹74,999 / month</span>
+              <span className="text-[9px] text-slate-400">≈ $900/mo</span>
+              <span className="text-[9px] font-semibold text-yellow-400 bg-yellow-950 border border-yellow-700 px-1.5 py-0.5 rounded">Recommended</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+              <div>✅ Up to <strong className="text-slate-200">500,000 verifications/mo</strong></div>
+              <div>🐟 <strong className="text-cyan-300">TinyFish Live-Web OSINT enrichment</strong> included</div>
+              <div>🎯 Target: Safetipin, Google Maps, Rapido/Ola</div>
+              <div>⚡ &lt;200ms P95 latency SLA</div>
+              <div>📈 Real-time metrics + trust graph webhook</div>
+              <div>📞 Dedicated support, 8hr SLA</div>
+            </div>
+          </div>
+
+          {/* Tier 3 */}
+          <div className="bg-cyan-950/30 border border-cyan-800 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-sm font-bold text-white">🏛️ Tier 3 — Smart City & Police Enterprise</span>
+              <span className="text-xs font-bold text-cyan-300 bg-cyan-900 border border-cyan-700 px-2 py-0.5 rounded-full">₹12L – ₹25L / year</span>
+              <span className="text-[9px] text-slate-400">Custom license</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+              <div>✅ <strong className="text-slate-200">Unlimited verifications</strong></div>
+              <div>🏛️ Target: Dial-112, Himmat Plus, State Portals</div>
+              <div>🖥️ On-premise / private-cloud deployment</div>
+              <div>🔒 Air-gapped mode for law enforcement</div>
+              <div>🤝 Dedicated integration team + training</div>
+              <div>📋 Custom SLA, 1hr incident response</div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* TAM/SAM/SOM quick note */}
+        <div className="mt-3 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-[9px] text-slate-500 space-y-0.5">
+          <div><strong className="text-slate-400">TAM</strong> — ₹4,200 Cr India civic-safety API market (2026, growing 34% YoY)</div>
+          <div><strong className="text-slate-400">SAM</strong> — ₹620 Cr addressable: 50 municipal corporations + 200 ride-hailing/navigation apps in Tier 1-2 cities</div>
+          <div><strong className="text-slate-400">SOM</strong> — ₹18 Cr in Year 1 targeting Delhi NCR: 3 enterprise + 15 Tier-2 API customers</div>
+        </div>
+      </div>
+
+      <div className="h-4" />
     </div>
   )
 }
