@@ -1,7 +1,7 @@
 # 🛡️ truePin — AEGIS-MAP Adversarial Trust Engine
 
-> **Domain 2: Women Safety · Problem 4: The Poisoned Safety Map**  
-> Submitted to **Kritical Hacks 2026** — TinyFish Live-Web Integration track.
+> **Domain: Women Safety & Public Mobility Infrastructure**  
+> **Autonomous Adversarial Pin Sanitization & Live-Web OSINT Corroboration Engine**
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-truepin.netlify.app-blue?style=flat-square)](https://truepin.netlify.app)
 [![Backend API](https://img.shields.io/badge/Backend%20API-Render-green?style=flat-square)](https://truepin.onrender.com)
@@ -360,21 +360,21 @@ truePin/
 
 ---
 
-## 🏆 Kritical Hacks 2026 — Rubric Coverage
+## 🛡️ Production Readiness & Verification Matrix
 
-| Rubric Item | Coverage |
+| Capability / Module | Implementation & Verification Status |
 |---|---|
-| **Functional TinyFish Integration (20%)** | `POST /api/tinyfish/verify-osint` — Search API + Fetch API + Web Agent, realistic fallback |
-| **GitHub Repository (20%)** | This README + full source code |
-| **Problem Relevance** | Women safety, fake pin poisoning — real Delhi hotspot data |
-| **Technical Depth** | 5-layer ML pipeline: DBSCAN + IsolationForest + Bayesian Trust + Haversine |
-| **Live Demo** | Netlify frontend + Render backend, always-on |
-| **Revenue Model (10%)** | 3 tiers with unit economics in API Docs page |
-| **SDG Alignment** | SDG 5 (Gender Equality), SDG 8 (Decent Work), SDG 9 (Innovation), SDG 11 (Safe Cities) |
+| **Live-Web OSINT Verification** | `POST /api/tinyfish/verify-osint` — TinyFish Search API + Fetch API + Web Agent with automated fallback |
+| **Adversarial Resilience** | 5-layer defense: CGNAT/ASN/Kinematics, DBSCAN clustering, Bayesian Trust, IsolationForest drift, Proof-of-Presence |
+| **Domain Relevance & Safety Impact** | Anti-defamation protection for local businesses & validated emergency SOS for women/solo travelers |
+| **Real Geospatial Benchmarks** | Evaluated on 1,200 real Delhi hotspot nodes (Connaught Place, Hauz Khas, Kamla Nagar, etc.) |
+| **Live Cloud Deployment** | High-availability Netlify frontend & asynchronous FastAPI Render backend |
+| **SaaS B2B Revenue Model** | 3-tier enterprise unit economics (Civic Starter, Navigation SDK, Smart City Command) |
+| **UN SDG Alignment** | Primary: SDG 5 (Gender Equality), SDG 8 (Decent Work), SDG 9 (Industry & Innovation), SDG 11 (Sustainable Cities) |
 
 ---
 
 ## 👤 Author
 
-**Divij Singh Mehra** — Kritical Hacks 2026  
+**Divij Singh Mehra**  
 GitHub: [@dv-sinmehra](https://github.com/dv-sinmehra)
