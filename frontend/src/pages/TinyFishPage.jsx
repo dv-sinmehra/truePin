@@ -15,14 +15,18 @@ function cleanFetchSnippet(raw, maxLen = 320) {
   const lines = raw.split('\n')
   const meaningful = lines.filter(l => {
     const t = l.trim()
-    if (t.length < 25) return false                      // too short = nav fragment
-    if (t.startsWith('#')) return false                  // markdown heading
-    if ((t.match(/\*/g) || []).length >= 3) return false // nav bullet line
-    if (t.startsWith('[') && t.includes('](')) return false // bare markdown link
+    if (t.length < 25) return false                       // too short = nav fragment
+    if (t.startsWith('#')) return false                   // markdown heading
+    if (t.startsWith('* ') || t.startsWith('- ')) return false // bullet list item
+    if ((t.match(/\*/g) || []).length >= 2) return false  // nav line with multiple *
+    if (t.startsWith('[') && t.includes('](')) return false  // bare markdown link
+    if (/^(Updated|Published|Written|Source|Share|Follow|Subscribe):/i.test(t)) return false
     return true
   })
+  // Also strip any leading * or - from individual sentences in the joined result
   const joined = meaningful.slice(0, 5).join(' ').replace(/\s+/g, ' ').trim()
-  return joined.length > maxLen ? joined.slice(0, maxLen) + '…' : joined
+  const cleaned = joined.replace(/^\*\s+/, '').replace(/^-\s+/, '')
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + '…' : cleaned
 }
 
 /** Relevance score → colour class */
