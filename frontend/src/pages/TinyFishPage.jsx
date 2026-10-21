@@ -1,6 +1,46 @@
 // TinyFishPage.jsx — TinyFish Live-Web OSINT Agent page
 import React, { useState } from 'react'
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Extract hostname badge from a URL */
+function getDomain(url) {
+  try { return new URL(url).hostname.replace(/^www\./, '') }
+  catch { return url }
+}
+
+/** Strip markdown nav/heading garbage from Fetch API raw text and return a clean excerpt */
+function cleanFetchSnippet(raw, maxLen = 320) {
+  if (!raw) return ''
+  const lines = raw.split('\n')
+  const meaningful = lines.filter(l => {
+    const t = l.trim()
+    if (t.length < 25) return false                      // too short = nav fragment
+    if (t.startsWith('#')) return false                  // markdown heading
+    if ((t.match(/\*/g) || []).length >= 3) return false // nav bullet line
+    if (t.startsWith('[') && t.includes('](')) return false // bare markdown link
+    return true
+  })
+  const joined = meaningful.slice(0, 5).join(' ').replace(/\s+/g, ' ').trim()
+  return joined.length > maxLen ? joined.slice(0, maxLen) + '…' : joined
+}
+
+/** Relevance score → colour class */
+function relevanceColor(score) {
+  if (score >= 0.85) return 'text-emerald-400'
+  if (score >= 0.70) return 'text-yellow-400'
+  return 'text-slate-400'
+}
+
+/** Friendly date string from ISO or "N days ago" */
+function fmtDate(d) {
+  if (!d) return null
+  if (d.includes('ago') || d.includes('day') || d.includes('hour')) return d
+  try {
+    return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return d }
+}
+
 const DELHI_ZONES = [
   { name: 'Connaught Place', lat: 28.6315, lng: 77.2167 },
   { name: 'Hauz Khas',       lat: 28.5494, lng: 77.2001 },
@@ -241,23 +281,108 @@ export default function TinyFishPage({ API, selectedReport }) {
             </div>
           </div>
 
-          {/* Live web sources */}
+          {/* Live web sources — structured cards */}
           <div>
-            <div className="text-[10px] font-bold text-slate-300 mb-2">🌐 Live Web Sources Scanned</div>
-            <div className="space-y-2">
-              {result.live_web_sources_scanned?.map((src, i) => (
-                <div key={i} className="bg-slate-900/70 border border-slate-700 rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className="text-[8px] font-bold bg-cyan-900 text-cyan-300 border border-cyan-700 px-1.5 py-0.5 rounded">
-                      {src.step}
-                    </span>
-                    <span className="text-[9px] text-slate-400 font-mono truncate">{src.url}</span>
-                    <span className="text-[8px] text-slate-500 ml-auto">relevance: {src.relevance_score}</span>
+            <div className="text-[10px] font-bold text-slate-300 mb-2 flex items-center gap-2">
+              🌐 Live Web Sources Scanned
+              <span className="text-[8px] font-normal text-slate-500">
+                {result.live_web_sources_scanned?.length} source{result.live_web_sources_scanned?.length !== 1 ? 's' : ''} analysed
+              </span>
+              {result.live_web_sources_scanned?.some(s => s.live_api_called) && (
+                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-emerald-900 border border-emerald-700 text-emerald-300">
+                  ● LIVE API
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {result.live_web_sources_scanned?.map((src, i) => {
+                const isSearch = src.step?.toLowerCase().includes('search')
+                const isFetch  = src.step?.toLowerCase().includes('fetch')
+                const domain   = getDomain(src.url)
+                const excerpt  = isFetch
+                  ? cleanFetchSnippet(src.extracted_snippet)
+                  : (src.extracted_snippet || '').slice(0, 320)
+                const date     = fmtDate(src.published_date || src.date)
+
+                return (
+                  <div
+                    key={i}
+                    className={`rounded-xl border p-3 space-y-2 ${
+                      isSearch
+                        ? 'bg-slate-900/80 border-slate-700'
+                        : 'bg-slate-900/90 border-cyan-900/60'
+                    }`}
+                  >
+                    {/* Row 1: step badge + domain + live indicator + relevance */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border ${
+                        isSearch
+                          ? 'bg-violet-950 text-violet-300 border-violet-700'
+                          : 'bg-cyan-950 text-cyan-300 border-cyan-800'
+                      }`}>
+                        {isSearch ? '🔍 Search' : '📄 Fetch'}
+                      </span>
+
+                      {/* Domain pill */}
+                      <span className="text-[8px] font-mono text-slate-400 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded">
+                        {domain}
+                      </span>
+
+                      {/* Date */}
+                      {date && (
+                        <span className="text-[8px] text-slate-500">📅 {date}</span>
+                      )}
+
+                      {/* Author (Fetch only) */}
+                      {isFetch && src.author && (
+                        <span className="text-[8px] text-slate-500">✍️ {src.author}</span>
+                      )}
+
+                      {/* Live indicator */}
+                      <span className={`ml-auto text-[8px] font-bold px-1 py-0.5 rounded ${
+                        src.live_api_called
+                          ? 'text-emerald-400'
+                          : 'text-slate-500'
+                      }`}>
+                        {src.live_api_called ? '● live' : '○ cached'}
+                      </span>
+
+                      {/* Relevance bar */}
+                      <span className={`text-[8px] font-semibold ${relevanceColor(src.relevance_score)}`}>
+                        {Math.round((src.relevance_score || 0) * 100)}% match
+                      </span>
+                    </div>
+
+                    {/* Row 2: Title */}
+                    {src.title && (
+                      <div className="text-[11px] font-semibold text-slate-100 leading-snug">
+                        {src.title}
+                      </div>
+                    )}
+
+                    {/* Row 3: Clean excerpt */}
+                    {excerpt ? (
+                      <div className="text-[10px] text-slate-300 leading-relaxed bg-slate-800/50 rounded-lg px-3 py-2 border border-slate-700/60">
+                        {excerpt}
+                      </div>
+                    ) : (
+                      <div className="text-[9px] text-slate-600 italic">No extractable content</div>
+                    )}
+
+                    {/* Row 4: Source URL (truncated, clickable) */}
+                    <a
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[8px] text-slate-500 hover:text-cyan-400 font-mono truncate block transition"
+                      title={src.url}
+                    >
+                      ↗ {src.url.length > 80 ? src.url.slice(0, 80) + '…' : src.url}
+                    </a>
                   </div>
-                  <div className="text-[10px] font-semibold text-slate-200 mb-0.5">{src.title}</div>
-                  <div className="text-[9px] text-slate-400 leading-relaxed">{src.extracted_snippet}</div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 
