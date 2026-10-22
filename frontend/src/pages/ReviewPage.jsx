@@ -145,6 +145,8 @@ export default function ReviewPage({ API }) {
   const [metrics, setMetrics] = useState({})
   const [loadingQueue, setLoadingQueue] = useState(false)
   const [activeTab, setActiveTab] = useState('queue')
+  const [triggerLoading, setTriggerLoading] = useState(false)
+  const [triggerMsg, setTriggerMsg] = useState(null)
 
   const fetchQueue = useCallback(async () => {
     setLoadingQueue(true)
@@ -186,6 +188,23 @@ export default function ReviewPage({ API }) {
     await fetchQueue()
   }
 
+  const triggerSos = async () => {
+    setTriggerLoading(true)
+    setTriggerMsg(null)
+    try {
+      const res = await fetch(`${API}/api/simulate/quarantined_sos`, { method: 'POST' })
+      if (!res.ok) throw new Error(`Status ${res.status}`)
+      const data = await res.json()
+      const rpt = Array.isArray(data) ? data[0] : data
+      setTriggerMsg({ type: 'ok', text: `✅ Quarantined SOS created — ${rpt?.report_id} (score ${rpt?.final_score})` })
+      await fetchQueue()
+    } catch (e) {
+      setTriggerMsg({ type: 'err', text: `❌ ${e.message}` })
+    } finally {
+      setTriggerLoading(false)
+    }
+  }
+
   const sosPriority = queue.filter(r => SOS_TYPES.has(r.report_type))
   const others = queue.filter(r => !SOS_TYPES.has(r.report_type))
 
@@ -204,6 +223,28 @@ export default function ReviewPage({ API }) {
           Review wrongly quarantined SOS reports. <span className="text-emerald-400 font-semibold">Release</span> recovers a real victim's pin onto the clean map.{' '}
           <span className="text-red-400 font-semibold">Confirm</span> permanently flags a fake. All decisions are logged in the audit trail.
         </div>
+      </div>
+
+      {/* 1-click SOS trigger */}
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={triggerSos}
+          disabled={triggerLoading}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-900/60 border border-orange-700 hover:bg-orange-900 disabled:opacity-50 text-orange-200 font-bold text-xs transition"
+        >
+          {triggerLoading
+            ? <><span className="animate-spin inline-block">⟳</span> Triggering…</>
+            : <>🚨 Trigger Quarantined SOS — New Account + Mobile ISP</>}
+        </button>
+        {triggerMsg && (
+          <div className={`text-[10px] px-3 py-1.5 rounded-lg border ${
+            triggerMsg.type === 'ok'
+              ? 'bg-emerald-950/30 border-emerald-800 text-emerald-300'
+              : 'bg-red-950/30 border-red-800 text-red-400'
+          }`}>
+            {triggerMsg.text}
+          </div>
+        )}
       </div>
 
       {/* Metric strip */}
@@ -301,7 +342,7 @@ export default function ReviewPage({ API }) {
                     {entry.decision === 'release' ? '✅ RELEASED' : '🚫 CONFIRMED FAKE'}
                   </span>
                   <span className="text-[9px] font-mono text-slate-400">{entry.report_id}</span>
-                  <span className="text-[8px] text-slate-600 ml-auto">{entry.timestamp_str}</span>
+                  <span className="text-[8px] text-slate-600 ml-auto">{(entry.timestamp_str || entry.timestamp || '').slice(0, 19).replace('T', ' ')} UTC</span>
                 </div>
                 <div className="text-[9px] text-slate-500">
                   Previous verdict: <span className="text-slate-300 font-semibold">{entry.previous_verdict}</span>
