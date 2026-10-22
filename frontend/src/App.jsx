@@ -9,6 +9,7 @@ import FirehosePage  from './pages/FirehosePage.jsx'
 import BenchmarkPage from './pages/BenchmarkPage.jsx'
 import ApiPage       from './pages/ApiPage.jsx'
 import TinyFishPage  from './pages/TinyFishPage.jsx'
+import ReviewPage    from './pages/ReviewPage.jsx'
 
 // In production: set VITE_API_URL to your Render backend URL
 // In development: falls back to localhost:8000
@@ -21,6 +22,7 @@ const NAV = [
   { id: 'benchmark',  icon: '📊',  label: 'Benchmark',      sublabel: '1,200 rows'     },
   { id: 'api',        icon: '🔌',  label: 'API Docs',       sublabel: 'REST Reference' },
   { id: 'tinyfish',   icon: '🐟',  label: 'TinyFish',       sublabel: 'Live-Web OSINT' },
+  { id: 'review',     icon: '🔍',  label: 'Review',         sublabel: 'FP Queue'       },
 ]
 
 export default function App() {
@@ -131,6 +133,7 @@ export default function App() {
       case 'benchmark': return <BenchmarkPage />
       case 'api':       return <ApiPage />
       case 'tinyfish':  return <TinyFishPage API={API} selectedReport={selectedReport} />
+      case 'review':    return <ReviewPage API={API} />
       default:          return null
     }
   }

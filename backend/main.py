@@ -57,6 +57,16 @@ class ProcessedReport(Report):
     trust_score_after: float
     processed_at: float
     tinyfish_osint_status: Optional[str] = "NOT_CHECKED"
+    # Review queue fields
+    original_verdict: Optional[str] = None
+    manually_released: bool = False
+    confirmed_fake: bool = False
+    review_note: Optional[str] = None
+
+
+class ReviewDecision(BaseModel):
+    decision: str   # "release" | "confirm"
+    note: str
 
 
 class TinyFishOsintRequest(BaseModel):
@@ -91,6 +101,11 @@ METRICS = {
     'fakes_quarantined': 0,
     'genuines_quarantined': 0,  # for suppression rate
 }
+
+# Review queue state
+REVIEW_LOG: List[Dict[str, Any]] = []   # audit trail
+REVIEWED_IDS: set = set()               # report_ids already reviewed (for 409)
+MANUAL_OVERRIDES: int = 0               # count of human overrides
 
 # ---------------------------------------------------------
 # Cold-Start Baseline Nodes (Layer 5)
@@ -331,18 +346,26 @@ def haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 
 def compute_metrics() -> Dict[str, Any]:
-    """Computes live system accuracy, contamination, and quarantine metrics."""
+    """Computes live system accuracy, contamination, and quarantine metrics.
+    Uses original_verdict (pre-review) so manual overrides don't change headline rates.
+    """
     total_reports = len(REPORTS)
     gt_fakes = [r for r in REPORTS if r.is_ground_truth_fake]
     gt_genuines = [r for r in REPORTS if not r.is_ground_truth_fake]
-    fakes_quarantined = len([r for r in gt_fakes if r.verdict == 'QUARANTINED'])
-    genuines_quarantined = len([r for r in gt_genuines if r.verdict == 'QUARANTINED'])
+
+    # Use original_verdict for metric calculations so human reviews don't skew the rates
+    def _ov(r):
+        return r.original_verdict if r.original_verdict else r.verdict
+
+    fakes_quarantined = len([r for r in gt_fakes if _ov(r) == 'QUARANTINED'])
+    genuines_quarantined = len([r for r in gt_genuines if _ov(r) == 'QUARANTINED'])
     fake_detection_rate = round((fakes_quarantined / len(gt_fakes) * 100), 1) if gt_fakes else 0.0
     genuine_suppression_rate = round((genuines_quarantined / len(gt_genuines) * 100), 1) if gt_genuines else 0.0
 
     fake_contamination = len(gt_fakes) / max(1, total_reports)
     map_accuracy_before = max(20.0, round(96.0 - fake_contamination * 76, 1))
 
+    # After map uses current verdict (manual releases ARE shown on clean map)
     non_quarantined_fakes_on_clean_map = len([r for r in gt_fakes if r.verdict != 'QUARANTINED'])
     total_on_clean_map = len([r for r in REPORTS if r.verdict != 'QUARANTINED']) + len(BASELINE_NODES)
     map_accuracy_after = round(max(90.0, 100.0 - (non_quarantined_fakes_on_clean_map / max(1, total_on_clean_map)) * 100), 1)
@@ -365,6 +388,7 @@ def compute_metrics() -> Dict[str, Any]:
         'map_accuracy_after': map_accuracy_after,
         'non_quarantined_fakes_on_clean_map': non_quarantined_fakes_on_clean_map,
         'total_on_clean_map': total_on_clean_map,
+        'manual_overrides': MANUAL_OVERRIDES,   # separate counter, doesn't affect above rates
     }
 
 
@@ -584,6 +608,10 @@ def process_report(report: Report) -> ProcessedReport:
         trust_score_after=round(USER_TRUST[report.user_id], 1),
         processed_at=time.time(),
         tinyfish_osint_status="NOT_CHECKED",
+        original_verdict=verdict,    # snapshot before any human review
+        manually_released=False,
+        confirmed_fake=False,
+        review_note=None,
     )
 
 
@@ -776,15 +804,121 @@ def get_state():
 
 @app.post('/api/reset')
 def reset_state():
-    """Clears all reports, user trust graph, and resets system metrics."""
+    """Clears all reports, user trust graph, review queue/log, and resets system metrics."""
+    global MANUAL_OVERRIDES
     REPORTS.clear()
     USER_TRUST.clear()
+    REVIEW_LOG.clear()
+    REVIEWED_IDS.clear()
+    MANUAL_OVERRIDES = 0
     METRICS['total_reports'] = 0
     METRICS['total_fakes'] = 0
     METRICS['total_genuines'] = 0
     METRICS['fakes_quarantined'] = 0
     METRICS['genuines_quarantined'] = 0
     return {'status': 'reset'}
+
+
+# ---------------------------------------------------------
+# Review Queue Endpoints (ig-nite Round 2)
+# ---------------------------------------------------------
+
+@app.get('/api/review-queue')
+def get_review_queue():
+    """
+    Returns QUARANTINED and SOFT_ALERT reports that have not yet been reviewed.
+    Sort order: SOS/UNSAFE_HARASSMENT first, then lowest final_score first.
+    """
+    queue = [
+        r for r in REPORTS
+        if r.verdict in ('QUARANTINED', 'SOFT_ALERT')
+        and r.report_id not in REVIEWED_IDS
+    ]
+    # Sort: SOS reports first (report_type == UNSAFE_HARASSMENT or SOS), then by score asc
+    SOS_TYPES = {'UNSAFE_HARASSMENT', 'CROWD_EMERGENCY', 'SOS'}
+    queue.sort(key=lambda r: (0 if r.report_type in SOS_TYPES else 1, r.final_score))
+    return {
+        'count': len(queue),
+        'queue': [r.model_dump() for r in queue],
+    }
+
+
+@app.post('/api/review/{report_id}')
+def review_report(report_id: str, decision: ReviewDecision):
+    """
+    Human review of a quarantined/soft-alert report.
+    decision.decision: "release" | "confirm"
+    decision.note: non-empty string (required)
+    Returns 404 if unknown, 409 if already reviewed, 422 if note is empty.
+    """
+    global MANUAL_OVERRIDES
+
+    # Validate note
+    if not decision.note or not decision.note.strip():
+        raise HTTPException(status_code=422, detail='A non-empty note is required for every review decision.')
+
+    # Validate decision value
+    if decision.decision not in ('release', 'confirm'):
+        raise HTTPException(status_code=422, detail="decision must be 'release' or 'confirm'.")
+
+    # Find report
+    report = next((r for r in REPORTS if r.report_id == report_id), None)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found.")
+
+    # Double-review guard
+    if report_id in REVIEWED_IDS:
+        raise HTTPException(status_code=409, detail=f"Report '{report_id}' has already been reviewed (conflict).")
+
+    previous_verdict = report.verdict
+
+    if decision.decision == 'release':
+        # Recover report: make it visible on the clean "after" map
+        report.verdict = 'VERIFIED'
+        report.manually_released = True
+        report.review_note = decision.note.strip()
+        # Small positive trust adjustment for the submitting user
+        USER_TRUST[report.user_id] = min(100.0, USER_TRUST.get(report.user_id, 40.0) + 5.0)
+        report.layer_log.append(f'REVIEW: Manually released by moderator — "{decision.note.strip()}"')
+    else:  # confirm
+        # Confirm it's fake: stays QUARANTINED, trust penalised
+        report.confirmed_fake = True
+        report.review_note = decision.note.strip()
+        USER_TRUST[report.user_id] = max(0.0, USER_TRUST.get(report.user_id, 40.0) - 5.0)
+        report.layer_log.append(f'REVIEW: Confirmed fake by moderator — "{decision.note.strip()}"')
+
+    # Record in audit trail
+    REVIEWED_IDS.add(report_id)
+    MANUAL_OVERRIDES += 1
+    audit_entry = {
+        'report_id': report_id,
+        'previous_verdict': previous_verdict,
+        'decision': decision.decision,
+        'note': decision.note.strip(),
+        'timestamp': time.time(),
+        'timestamp_str': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+    REVIEW_LOG.append(audit_entry)
+
+    return {
+        'status': 'ok',
+        'report_id': report_id,
+        'previous_verdict': previous_verdict,
+        'new_verdict': report.verdict,
+        'decision': decision.decision,
+        'manual_overrides': MANUAL_OVERRIDES,
+        'audit': audit_entry,
+    }
+
+
+@app.get('/api/review-log')
+def get_review_log():
+    """Returns the full audit trail of all human review decisions."""
+    return {
+        'total': len(REVIEW_LOG),
+        'manual_overrides': MANUAL_OVERRIDES,
+        'log': list(reversed(REVIEW_LOG)),   # most recent first
+    }
 
 
 @app.get('/api/health')
