@@ -8,6 +8,7 @@ from sklearn.cluster import DBSCAN
 from sklearn.ensemble import IsolationForest
 import time, uuid, math, random, csv, io, os, pathlib
 from collections import defaultdict
+from datetime import datetime
 try:
     import httpx
     HTTPX_AVAILABLE = True
@@ -57,8 +58,11 @@ class ProcessedReport(Report):
     trust_score_after: float
     processed_at: float
     tinyfish_osint_status: Optional[str] = "NOT_CHECKED"
-    # Review queue fields
-    original_verdict: Optional[str] = None
+    # Review queue fields (ig-nite Round 2)
+    original_verdict: Optional[str] = None    # snapshot of verdict before any human review
+    previous_verdict: Optional[str] = None    # same — alias exposed in audit trail
+    reviewed: bool = False                    # True once a moderator has acted
+    review_decision: Optional[str] = None     # "release" | "confirm"
     manually_released: bool = False
     confirmed_fake: bool = False
     review_note: Optional[str] = None
@@ -609,6 +613,9 @@ def process_report(report: Report) -> ProcessedReport:
         processed_at=time.time(),
         tinyfish_osint_status="NOT_CHECKED",
         original_verdict=verdict,    # snapshot before any human review
+        previous_verdict=verdict,    # audit-trail alias
+        reviewed=False,
+        review_decision=None,
         manually_released=False,
         confirmed_fake=False,
         review_note=None,
@@ -776,10 +783,34 @@ def simulate_scenario(scenario: str):
             REPORTS.append(proc)
             results.append(proc)
 
+    elif scenario == 'quarantined_sos':
+        # 🚨 Demo scenario: genuine SOS from brand-new account with no motion (locked room).
+        # Score: 0.4*40 + L1(+25-30) = 16 - 5 = 11 → QUARANTINED
+        # Ranked #1 in review queue because report_type = UNSAFE_HARASSMENT (SOS type).
+        rep = Report(
+            report_id=f"rep_qsos_{uuid.uuid4().hex[:8]}",
+            timestamp=now,
+            user_id=f"sos_victim_{uuid.uuid4().hex[:6]}",
+            account_age_days=1,                # Brand-new account → base_trust=40
+            lat=28.6315 + random.uniform(-0.002, 0.002),
+            lng=77.2167 + random.uniform(-0.002, 0.002),
+            report_type='UNSAFE_HARASSMENT',   # SOS type — ranks #1 in queue
+            ip_address=f'49.205.{random.randint(10, 50)}.{random.randint(2, 250)}',
+            asn_type='MOBILE_ISP',             # Jio SIM → L1 +25
+            device_hash=str(uuid.uuid4())[:8],
+            kinematic_variance=0.0,            # Hidden, motionless → L1 -30 (flatline)
+            has_gps_breadcrumbs=False,         # No GPS trail indoors
+            approach_speed_kmh=0.0,
+            is_ground_truth_fake=False         # REAL victim — wrongly quarantined
+        )
+        proc = process_report(rep)
+        REPORTS.append(proc)
+        results.append(proc)
+
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown scenario '{scenario}'. Available scenarios: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift, new_account_sos."
+            detail=f"Unknown scenario '{scenario}'. Available scenarios: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift, new_account_sos, quarantined_sos."
         )
 
     # Refresh metrics after simulation batch
@@ -823,23 +854,79 @@ def reset_state():
 # Review Queue Endpoints (ig-nite Round 2)
 # ---------------------------------------------------------
 
+# SOS detection helper — checks report_type set AND string match per spec
+_SOS_TYPES = {'UNSAFE_HARASSMENT', 'CROWD_EMERGENCY', 'SOS'}
+
+def _is_sos(r) -> bool:
+    return r.report_type in _SOS_TYPES or 'SOS' in str(r.report_type).upper()
+
+
+class BulkReleaseRequest(BaseModel):
+    asn: str
+    note: str
+
+
 @app.get('/api/review-queue')
 def get_review_queue():
     """
     Returns QUARANTINED and SOFT_ALERT reports that have not yet been reviewed.
-    Sort order: SOS/UNSAFE_HARASSMENT first, then lowest final_score first.
+    Sort order: SOS first (by type string match), then lowest final_score first.
     """
     queue = [
         r for r in REPORTS
         if r.verdict in ('QUARANTINED', 'SOFT_ALERT')
-        and r.report_id not in REVIEWED_IDS
+        and not r.reviewed
     ]
-    # Sort: SOS reports first (report_type == UNSAFE_HARASSMENT or SOS), then by score asc
-    SOS_TYPES = {'UNSAFE_HARASSMENT', 'CROWD_EMERGENCY', 'SOS'}
-    queue.sort(key=lambda r: (0 if r.report_type in SOS_TYPES else 1, r.final_score))
+    queue.sort(key=lambda r: (0 if _is_sos(r) else 1, r.final_score))
     return {
         'count': len(queue),
         'queue': [r.model_dump() for r in queue],
+    }
+
+
+# IMPORTANT: bulk-release MUST be declared BEFORE /{report_id} to avoid route conflict
+@app.post('/api/review/bulk-release')
+def bulk_release_by_asn(req: BulkReleaseRequest):
+    """
+    Release all unreviewed QUARANTINED reports matching a given ASN/network group.
+    Requires non-empty note. Each released report is logged and manual_overrides increments.
+    """
+    global MANUAL_OVERRIDES
+    if not req.note or not req.note.strip():
+        raise HTTPException(status_code=422, detail='A non-empty note is required')
+
+    released = []
+    for report in REPORTS:
+        if (
+            report.verdict == 'QUARANTINED'
+            and not report.reviewed
+            and getattr(report, 'asn_type', '') == req.asn
+        ):
+            prev_v = report.verdict
+            report.reviewed = True
+            report.review_decision = 'release'
+            report.previous_verdict = prev_v
+            report.manually_released = True
+            report.review_note = req.note.strip()
+            report.verdict = 'VERIFIED'
+            USER_TRUST[report.user_id] = min(100.0, USER_TRUST.get(report.user_id, 40.0) + 5.0)
+            REVIEWED_IDS.add(report.report_id)
+            MANUAL_OVERRIDES += 1
+            audit_entry = {
+                'report_id': report.report_id,
+                'previous_verdict': prev_v,
+                'decision': 'release',
+                'note': req.note.strip(),
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
+            }
+            REVIEW_LOG.append(audit_entry)
+            released.append(report.report_id)
+
+    return {
+        'status': 'ok',
+        'released_count': len(released),
+        'released_ids': released,
+        'manual_overrides': MANUAL_OVERRIDES,
     }
 
 
@@ -849,54 +936,62 @@ def review_report(report_id: str, decision: ReviewDecision):
     Human review of a quarantined/soft-alert report.
     decision.decision: "release" | "confirm"
     decision.note: non-empty string (required)
-    Returns 404 if unknown, 409 if already reviewed, 422 if note is empty.
+    Returns 404 if unknown, 409 if already reviewed, 422/400 if note is empty.
     """
     global MANUAL_OVERRIDES
 
-    # Validate note
+    # Validate note FIRST (before looking up report)
     if not decision.note or not decision.note.strip():
-        raise HTTPException(status_code=422, detail='A non-empty note is required for every review decision.')
+        raise HTTPException(status_code=422, detail='A non-empty note is required')
 
     # Validate decision value
     if decision.decision not in ('release', 'confirm'):
-        raise HTTPException(status_code=422, detail="decision must be 'release' or 'confirm'.")
+        raise HTTPException(status_code=422, detail="decision must be 'release' or 'confirm'")
 
     # Find report
     report = next((r for r in REPORTS if r.report_id == report_id), None)
     if report is None:
-        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found.")
+        raise HTTPException(status_code=404, detail='Report not found')
 
-    # Double-review guard
-    if report_id in REVIEWED_IDS:
-        raise HTTPException(status_code=409, detail=f"Report '{report_id}' has already been reviewed (conflict).")
+    # Double-review guard — check both the field and the set
+    if report.reviewed or report_id in REVIEWED_IDS:
+        raise HTTPException(status_code=409, detail='Report has already been reviewed')
+
+    # Only QUARANTINED / SOFT_ALERT reports may be reviewed
+    if report.verdict not in ('QUARANTINED', 'SOFT_ALERT'):
+        raise HTTPException(status_code=409, detail='Report has already been reviewed')
 
     previous_verdict = report.verdict
+
+    # Mark reviewed fields on the report object
+    report.reviewed = True
+    report.review_decision = decision.decision
+    report.previous_verdict = previous_verdict
+    report.review_note = decision.note.strip()
 
     if decision.decision == 'release':
         # Recover report: make it visible on the clean "after" map
         report.verdict = 'VERIFIED'
         report.manually_released = True
-        report.review_note = decision.note.strip()
         # Small positive trust adjustment for the submitting user
         USER_TRUST[report.user_id] = min(100.0, USER_TRUST.get(report.user_id, 40.0) + 5.0)
         report.layer_log.append(f'REVIEW: Manually released by moderator — "{decision.note.strip()}"')
+        MANUAL_OVERRIDES += 1
     else:  # confirm
         # Confirm it's fake: stays QUARANTINED, trust penalised
         report.confirmed_fake = True
-        report.review_note = decision.note.strip()
+        report.verdict = 'QUARANTINED'
         USER_TRUST[report.user_id] = max(0.0, USER_TRUST.get(report.user_id, 40.0) - 5.0)
         report.layer_log.append(f'REVIEW: Confirmed fake by moderator — "{decision.note.strip()}"')
 
     # Record in audit trail
     REVIEWED_IDS.add(report_id)
-    MANUAL_OVERRIDES += 1
     audit_entry = {
         'report_id': report_id,
         'previous_verdict': previous_verdict,
         'decision': decision.decision,
         'note': decision.note.strip(),
-        'timestamp': time.time(),
-        'timestamp_str': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
     REVIEW_LOG.append(audit_entry)
 
