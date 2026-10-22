@@ -8,7 +8,7 @@ import SimulatorPage from './pages/SimulatorPage.jsx'
 import FirehosePage  from './pages/FirehosePage.jsx'
 import BenchmarkPage from './pages/BenchmarkPage.jsx'
 import ApiPage       from './pages/ApiPage.jsx'
-import TinyFishPage  from './pages/TinyFishPage.jsx'
+import PrunePage     from './pages/PrunePage.jsx'
 import ReviewPage    from './pages/ReviewPage.jsx'
 
 // In production: set VITE_API_URL to your Render backend URL
@@ -21,7 +21,7 @@ const NAV = [
   { id: 'firehose',   icon: '📡',  label: 'Firehose',       sublabel: 'Live Reports'   },
   { id: 'benchmark',  icon: '📊',  label: 'Benchmark',      sublabel: '1,200 rows'     },
   { id: 'api',        icon: '🔌',  label: 'API Docs',       sublabel: 'REST Reference' },
-  { id: 'tinyfish',   icon: '🐟',  label: 'TinyFish',       sublabel: 'Live-Web OSINT' },
+  { id: 'tinyfish',   icon: '🌿',  label: 'Prune AI',       sublabel: 'LLM Gateway'    },
   { id: 'review',     icon: '🔍',  label: 'Review',         sublabel: 'FP Queue'       },
 ]
 
@@ -132,7 +132,7 @@ export default function App() {
       case 'firehose':  return <FirehosePage  {...sharedProps} />
       case 'benchmark': return <BenchmarkPage />
       case 'api':       return <ApiPage />
-      case 'tinyfish':  return <TinyFishPage API={API} selectedReport={selectedReport} />
+      case 'tinyfish':  return <PrunePage API={API} selectedReport={selectedReport} />
       case 'review':    return <ReviewPage API={API} />
       default:          return null
     }

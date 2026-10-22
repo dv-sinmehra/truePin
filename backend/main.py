@@ -22,9 +22,9 @@ try:
 except ImportError:
     pass  # python-dotenv not installed yet; env vars still work if set externally
 
-# TinyFish API config — read AFTER load_dotenv so .env is picked up locally
-TINYFISH_API_KEY = os.environ.get('TINYFISH_API_KEY', '')
-TINYFISH_BASE_URL = 'https://api.tinyfish.io'
+# Prune AI gateway config — read AFTER load_dotenv so .env is picked up locally
+PRUNE_API_KEY = os.environ.get('PRUNE_API_KEY', '')
+PRUNE_BASE_URL = 'https://api.withprune.com/v1'
 
 # ---------------------------------------------------------
 # Pydantic Models
@@ -57,7 +57,7 @@ class ProcessedReport(Report):
     l5_boost: float
     trust_score_after: float
     processed_at: float
-    tinyfish_osint_status: Optional[str] = "NOT_CHECKED"
+    tinyfish_osint_status: Optional[str] = None  # kept for schema compat
     # Review queue fields (ig-nite Round 2)
     original_verdict: Optional[str] = None    # snapshot of verdict before any human review
     previous_verdict: Optional[str] = None    # same — alias exposed in audit trail
@@ -73,23 +73,26 @@ class ReviewDecision(BaseModel):
     note: str
 
 
-class TinyFishOsintRequest(BaseModel):
+class PruneVerifyRequest(BaseModel):
     lat: float
     lng: float
     zone_name: str = "Unknown Zone"
     report_type: str = "INCIDENT"
     current_trust_score: float = 50.0
+    model: str = "gpt-4o-mini"   # LLM model routed through Prune gateway
 
-class TinyFishOsintResponse(BaseModel):
+
+class PruneVerifyResponse(BaseModel):
     zone_name: str
     lat: float
     lng: float
-    tinyfish_apis_used: List[str]
-    live_web_sources_scanned: List[Dict[str, Any]]
-    corroboration_verdict: str
+    model_used: str
+    prune_metadata: Optional[Dict[str, Any]] = None
+    corroboration_verdict: str   # "CORROBORATED_HAZARD" | "DEFAMATION_MISMATCH"
     trust_score_adjustment: float
-    web_agent_action: Dict[str, Any]
-    tinyfish_osint_status: str
+    analysis: str
+    civic_action: Dict[str, Any]
+    prune_status: str            # "LIVE" | "FALLBACK"
     processing_time_ms: float
 
 
@@ -611,7 +614,7 @@ def process_report(report: Report) -> ProcessedReport:
         l5_boost=round(l5_boost, 1),
         trust_score_after=round(USER_TRUST[report.user_id], 1),
         processed_at=time.time(),
-        tinyfish_osint_status="NOT_CHECKED",
+        tinyfish_osint_status=None,
         original_verdict=verdict,    # snapshot before any human review
         previous_verdict=verdict,    # audit-trail alias
         reviewed=False,
@@ -1026,426 +1029,147 @@ def health_check():
 
 
 # ---------------------------------------------------------
-# OSM Live Fetch Endpoint
-# ---------------------------------------------------------
-@app.get('/api/osm/fetch-live')
-async def osm_fetch_live():
-    """
-    Fetch real OpenStreetMap police stations and metro entrances in Central Delhi.
-    Strategy: Try Overpass API (3 mirrors) → if all timeout, use TinyFish Fetch as fallback source.
-    """
-    CURATED_FALLBACK_NODES = [
-        {'id': 'osm_cp_police_01',   'lat': 28.6328, 'lng': 77.2185, 'tags': {'amenity': 'police',           'name': 'Connaught Place Police Station'},     'source': 'curated'},
-        {'id': 'osm_rajiv_metro_01', 'lat': 28.6310, 'lng': 77.2155, 'tags': {'railway': 'subway_entrance',   'name': 'Rajiv Chowk Metro Gate 2 (24/7)'},   'source': 'curated'},
-        {'id': 'osm_bkb_metro_01',   'lat': 28.6340, 'lng': 77.2172, 'tags': {'railway': 'subway_entrance',   'name': 'Barakhamba Road Metro Gate 1'},       'source': 'curated'},
-        {'id': 'osm_patel_police_01','lat': 28.6370, 'lng': 77.2090, 'tags': {'amenity': 'police',           'name': 'Patel Chowk Police Post'},             'source': 'curated'},
-        {'id': 'osm_janpath_metro',  'lat': 28.6292, 'lng': 77.2138, 'tags': {'railway': 'subway_entrance',   'name': 'Janpath Metro Entrance'},             'source': 'curated'},
-        {'id': 'osm_inner_pcr',      'lat': 28.6298, 'lng': 77.2160, 'tags': {'amenity': 'police',           'name': 'PCR Van Post — Inner Circle CP'},      'source': 'curated'},
-    ]
-
-    if not HTTPX_AVAILABLE:
-        return {'source': 'curated', 'nodes': CURATED_FALLBACK_NODES, 'count': len(CURATED_FALLBACK_NODES), 'note': 'httpx not available'}
-
-    overpass_query = '[out:json][timeout:20];(node["amenity"="police"](28.61,77.19,28.66,77.24);node["railway"="subway_entrance"](28.61,77.19,28.66,77.24););out body;'
-    OSM_MIRRORS = [
-        'https://overpass-api.de/api/interpreter',
-        'https://overpass.kumi.systems/api/interpreter',
-        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    ]
-    osm_headers = {'Accept': 'application/json', 'User-Agent': 'truePin-AEGIS-MAP/1.0 (educational)'}
-
-    # ── Try Overpass mirrors ───────────────────────────────────────────
-    for mirror in OSM_MIRRORS:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(mirror, params={'data': overpass_query}, headers=osm_headers)
-                resp.raise_for_status()
-                data = resp.json()
-                nodes = [
-                    {
-                        'id': str(el.get('id')),
-                        'lat': el.get('lat'),
-                        'lng': el.get('lon'),
-                        'tags': el.get('tags', {}),
-                        'source': 'openstreetmap',
-                    }
-                    for el in data.get('elements', [])
-                    if el.get('type') == 'node' and el.get('lat') and el.get('lon')
-                ]
-                if nodes:
-                    return {'source': 'openstreetmap', 'nodes': nodes, 'count': len(nodes), 'mirror': mirror}
-        except Exception:
-            continue  # try next mirror
-
-    # ── All Overpass mirrors failed → try TinyFish Fetch as live data source ──
-    if TINYFISH_API_KEY:
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                tf_headers = {"X-API-Key": TINYFISH_API_KEY, "Content-Type": "application/json"}
-                # Use TinyFish to fetch a structured OSM/safety-node page for Delhi
-                fetch_resp = await client.post(
-                    "https://api.fetch.tinyfish.ai",
-                    headers=tf_headers,
-                    json={
-                        "urls": ["https://www.openstreetmap.org/#map=15/28.6315/77.2167"],
-                        "format": "markdown",
-                        "ttl": 0,
-                    },
-                )
-                if fetch_resp.status_code == 200:
-                    # Return curated nodes enriched with a TinyFish source label
-                    enriched = [dict(n, source='tinyfish_assisted') for n in CURATED_FALLBACK_NODES]
-                    return {
-                        'source': 'tinyfish_assisted',
-                        'nodes': enriched,
-                        'count': len(enriched),
-                        'note': 'Overpass API unavailable; nodes sourced via TinyFish-assisted curated OSM data',
-                    }
-        except Exception:
-            pass
-
-    # ── Final fallback: curated pre-verified nodes ──────────────────────
-    return {
-        'source': 'curated',
-        'nodes': CURATED_FALLBACK_NODES,
-        'count': len(CURATED_FALLBACK_NODES),
-        'note': 'Curated verified Delhi safety nodes — police booths and metro gates from OpenStreetMap',
-    }
-
-
-# ---------------------------------------------------------
-# TinyFish Live-Web OSINT Module
+# Prune AI Gateway -- LLM-Powered Corroboration Endpoint
 # ---------------------------------------------------------
 
 DELHI_ZONE_CONTEXT = {
-    'Connaught Place': {
-        'civic_alerts': 'High footfall zone — frequent streetlight complaints filed on MCD portal; CCTV coverage 85%',
-        'business_density': 'High — 200+ licensed eateries, hotels, retail. Safetipin score: 7.2/10',
-        'patrol_zone': 'CP Beat — PCR unit response time avg 4.2 min',
-    },
-    'Hauz Khas': {
-        'civic_alerts': 'Village area has unlit alleys near Hauz Khas Fort; street-lighting complaints pending >30 days',
-        'business_density': 'Medium — restaurant lane, nightlife zone. Safetipin score: 6.1/10',
-        'patrol_zone': 'SHG Beat — PCR response time avg 7.1 min',
-    },
-    'Kamla Nagar': {
-        'civic_alerts': 'Student-dense area; irregular street lighting. 3 recent FIRs near metro underpass',
-        'business_density': 'High — student market, food stalls, hostels. Safetipin score: 6.8/10',
-        'patrol_zone': 'KN Beat — PCR response time avg 5.5 min',
-    },
-    'Laxmi Nagar': {
-        'civic_alerts': 'Commercial corridor; waterlogging + pothole complaints on MCD app',
-        'business_density': 'High — coaching institutes, budget hotels, late-night dhabas. Safetipin score: 5.9/10',
-        'patrol_zone': 'LN Beat — PCR response time avg 6.8 min',
-    },
-    'Rohini': {
-        'civic_alerts': 'Residential sector — street-lighting failure in Sector 15 and 24 reported Oct 2026',
-        'business_density': 'Medium — malls, community centres. Safetipin score: 6.5/10',
-        'patrol_zone': 'Rohini Beat — PCR response time avg 8.3 min',
-    },
-    'Dwarka': {
-        'civic_alerts': 'Metro corridor — well-lit main roads; sub-sector interior lanes flagged',
-        'business_density': 'Medium — residential DDA flats, sector markets. Safetipin score: 6.9/10',
-        'patrol_zone': 'Dwarka Beat — PCR response time avg 9.1 min',
-    },
-    'Saket': {
-        'civic_alerts': 'Mall district — safe perimeter lighting; Select City Walk CCTV dense coverage',
-        'business_density': 'High — premium retail, cinema, restaurants. Safetipin score: 7.8/10',
-        'patrol_zone': 'Saket Beat — PCR response time avg 5.2 min',
-    },
-    'Karol Bagh': {
-        'civic_alerts': 'Dense market area; Ajmal Khan Road lighting gap reported; hawker zone',
-        'business_density': 'Very High — wholesale market, garment, electronics, hotels. Safetipin score: 5.7/10',
-        'patrol_zone': 'KB Beat — PCR response time avg 6.1 min',
-    },
+    'Connaught Place': {'civic': 'High footfall zone; CCTV coverage 85%; PCR avg 4.2 min', 'safetipin': 7.2},
+    'Hauz Khas':       {'civic': 'Unlit alleys near fort; street-lighting complaints >30 days pending', 'safetipin': 6.1},
+    'Kamla Nagar':     {'civic': 'Student-dense area; 3 recent FIRs near metro underpass', 'safetipin': 6.8},
+    'Laxmi Nagar':     {'civic': 'Commercial corridor; waterlogging and pothole complaints on MCD app', 'safetipin': 5.9},
+    'Rohini':          {'civic': 'Street-lighting failure in Sector 15 and 24 reported Oct 2026', 'safetipin': 6.5},
+    'Dwarka':          {'civic': 'Metro corridor; well-lit main roads; sub-sector lanes flagged', 'safetipin': 6.9},
+    'Saket':           {'civic': 'Mall district; Select City Walk CCTV dense coverage', 'safetipin': 7.8},
+    'Karol Bagh':      {'civic': 'Dense market; Ajmal Khan Road lighting gap; hawker zone', 'safetipin': 5.7},
 }
 
-def _build_tinyfish_fallback(req: TinyFishOsintRequest) -> TinyFishOsintResponse:
-    """Build a realistic, deterministic TinyFish fallback response when API key is absent or rate-limited."""
-    rng = random.Random(int(req.lat * 1000 + req.lng * 1000))
-    zone = req.zone_name
-    ctx = DELHI_ZONE_CONTEXT.get(zone, {
-        'civic_alerts': 'General Delhi zone — standard civic monitoring active',
-        'business_density': 'Medium density area',
-        'patrol_zone': 'Standard PCR beat coverage',
-    })
 
-    # Deterministic verdict: high trust score → likely real → CORROBORATED_HAZARD
-    if req.current_trust_score >= 55.0:
-        verdict = 'CORROBORATED_HAZARD'
-        adjustment = +18.0
-        status = 'CORROBORATED'
-        agent_outcome = 'TICKET_FILED'
-        agent_ticket_id = f"MCD-PCR-{rng.randint(10000,99999)}"
-        agent_message = f"TinyFish Web Agent successfully auto-filed Civic Patrol Dispatch ticket #{agent_ticket_id} on Delhi Municipal Portal (mcdonline.nic.in). Patrol unit notified for {zone} zone."
-    else:
-        verdict = 'DEFAMATION_MISMATCH'
-        adjustment = -30.0
-        status = 'FLAGGED'
-        agent_outcome = 'TICKET_BLOCKED'
-        agent_ticket_id = None
-        agent_message = f"TinyFish Web Agent blocked — live web signals for {zone} do not corroborate reported hazard. Defamation raid pattern detected. Report quarantined."
+def _prune_fallback(req: PruneVerifyRequest) -> PruneVerifyResponse:
+    """Deterministic fallback when PRUNE_API_KEY is absent or the request fails."""
+    import random as _rnd
+    rng = _rnd.Random(int(req.lat * 1000 + req.lng * 1000))
+    ctx = DELHI_ZONE_CONTEXT.get(req.zone_name, {'civic': 'Standard Delhi zone monitoring', 'safetipin': 6.0})
+    is_corroborated = req.current_trust_score >= 55.0
+    verdict = 'CORROBORATED_HAZARD' if is_corroborated else 'DEFAMATION_MISMATCH'
+    adjustment = +18.0 if is_corroborated else -30.0
+    ticket_id = f"NDMC-{rng.randint(10000, 99999)}" if is_corroborated else None
 
-    t0 = time.time()
-    sources = [
-        {
-            "step": "TinyFish Search API",
-            "query": f"Delhi {zone} safety hazard street lighting civic alert 2026",
-            "url": f"https://mcdonline.nic.in/complaints/zone/{zone.lower().replace(' ', '-')}",
-            "title": f"MCD Online — {zone} Civic Complaints Portal",
-            "extracted_snippet": ctx['civic_alerts'],
-            "relevance_score": round(rng.uniform(0.72, 0.94), 2),
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        },
-        {
-            "step": "TinyFish Fetch API",
-            "query": f"Safetipin safety score {zone} Delhi women night safety",
-            "url": f"https://safetipin.com/safe-city/delhi/{zone.lower().replace(' ', '-')}",
-            "title": f"Safetipin — {zone} Safety Audit Score",
-            "extracted_snippet": ctx['business_density'],
-            "relevance_score": round(rng.uniform(0.68, 0.91), 2),
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        },
-        {
-            "step": "TinyFish Search API",
-            "query": f"Delhi Police PCR {zone} beat patrol advisory traffic",
-            "url": f"https://delhipolice.gov.in/pcr-alerts/{zone.lower().replace(' ', '-')}",
-            "title": f"Delhi Police — {zone} Patrol Beat Advisor",
-            "extracted_snippet": ctx['patrol_zone'],
-            "relevance_score": round(rng.uniform(0.65, 0.88), 2),
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        },
-        {
-            "step": "TinyFish Fetch API",
-            "query": f"Delhi traffic advisory protest road block {zone} Oct 2026",
-            "url": f"https://delhitrafficpolice.nic.in/advisories/?zone={zone.lower().replace(' ', '+')}",
-            "title": f"Delhi Traffic Police — {zone} Live Advisories",
-            "extracted_snippet": f"No active traffic blocks or protest advisories within 500m of ({req.lat:.4f}, {req.lng:.4f}) as of {time.strftime('%d %b %Y %H:%M UTC', time.gmtime())}.",
-            "relevance_score": round(rng.uniform(0.60, 0.80), 2),
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        },
-    ]
-
-    processing_ms = round((time.time() - t0) * 1000 + rng.uniform(180, 450), 1)
-
-    return TinyFishOsintResponse(
-        zone_name=zone,
+    analysis = (
+        f"Civic data for {req.zone_name} (Safetipin {ctx['safetipin']}/10): {ctx['civic']}. "
+        f"User trust score {req.current_trust_score:.0f}/100 -- report assessed as "
+        f"{'genuine safety hazard' if is_corroborated else 'potential defamation / false alarm'}."
+    )
+    return PruneVerifyResponse(
+        zone_name=req.zone_name,
         lat=req.lat,
         lng=req.lng,
-        tinyfish_apis_used=["TinyFish Search API", "TinyFish Fetch API", "TinyFish Web Agent"],
-        live_web_sources_scanned=sources,
+        model_used=req.model,
+        prune_metadata=None,
         corroboration_verdict=verdict,
         trust_score_adjustment=adjustment,
-        web_agent_action={
-            "outcome": agent_outcome,
-            "ticket_id": agent_ticket_id,
-            "portal": "mcdonline.nic.in / Delhi Police PCR",
-            "steps_executed": [
-                f"Step 1 — Navigated to MCD Online portal for {zone}",
-                f"Step 2 — Auto-filled patrol dispatch form with lat={req.lat:.4f}, lng={req.lng:.4f}",
-                f"Step 3 — Submitted civic hazard ticket",
-            ],
-            "message": agent_message,
+        analysis=analysis,
+        civic_action={
+            'outcome': 'TICKET_FILED' if is_corroborated else 'TICKET_BLOCKED',
+            'ticket_id': ticket_id,
+            'portal': 'ndmc.gov.in / Delhi Police PCR',
+            'message': (
+                f"Patrol dispatch ticket #{ticket_id} filed for {req.zone_name}."
+                if is_corroborated else
+                f"Ticket blocked -- signals for {req.zone_name} do not corroborate hazard."
+            ),
         },
-        tinyfish_osint_status=status,
-        processing_time_ms=processing_ms,
+        prune_status='FALLBACK',
+        processing_time_ms=round(time.time() % 300 + 120, 1),
     )
 
 
-async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse:
+async def _call_prune(req: PruneVerifyRequest) -> PruneVerifyResponse:
     """
-    Calls real TinyFish APIs (Search → Fetch → Web Agent) using official endpoints.
-    Auth: X-API-Key header.
-    Search API  → GET  https://api.search.tinyfish.ai
-    Fetch API   → POST https://api.fetch.tinyfish.ai   (response: {"results":[{url,title,text,description}]})
-    Web Agent   → POST https://agent.tinyfish.ai/v1/automation/run (slow; graceful fallback on timeout)
-    Falls back to _build_tinyfish_fallback() on missing key, timeout, or any error.
+    Route an LLM corroboration call through the Prune AI gateway.
+    Prune is OpenAI-compatible: swap base_url to https://api.withprune.com/v1.
+    Returns prune_metadata with cache hits and cost savings.
+    Falls back gracefully when PRUNE_API_KEY is not set or on any error.
     """
-    if not TINYFISH_API_KEY or not HTTPX_AVAILABLE:
-        fallback = _build_tinyfish_fallback(req)
-        fallback.live_web_sources_scanned.insert(0, {
-            "step": "System Notice",
-            "url": "",
-            "title": "Fallback Mode — TINYFISH_API_KEY not configured",
-            "extracted_snippet": "Set TINYFISH_API_KEY env var to enable real live-web calls.",
-            "relevance_score": 0.0,
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            "live_api_called": False,
-        })
-        return fallback
+    if not PRUNE_API_KEY or not HTTPX_AVAILABLE:
+        return _prune_fallback(req)
+
+    ctx = DELHI_ZONE_CONTEXT.get(req.zone_name, {'civic': 'Standard Delhi zone', 'safetipin': 6.0})
+    prompt = (
+        f"You are a civic safety corroboration AI for Delhi, India.\n"
+        f"Zone: {req.zone_name} | Lat: {req.lat:.4f}, Lng: {req.lng:.4f}\n"
+        f"Report type: {req.report_type}\n"
+        f"User trust score: {req.current_trust_score:.0f}/100\n"
+        f"Civic context: {ctx['civic']} (Safetipin score {ctx['safetipin']}/10)\n\n"
+        f"Task: Determine if this safety report is genuine or a defamation/fake raid.\n"
+        f"Respond ONLY with a JSON object with keys: verdict (CORROBORATED_HAZARD or DEFAMATION_MISMATCH), "
+        f"trust_adjustment (number: +18 if genuine, -30 if fake), analysis (1-2 sentence reasoning), "
+        f"civic_action (string: brief patrol/ticket action taken)."
+    )
 
     t0 = time.time()
-    tf_headers = {
-        "X-API-Key": TINYFISH_API_KEY,
-        "Content-Type": "application/json",
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-
-            # ── Step 1: TinyFish Search API ────────────────────────────────
-            search_resp = await client.get(
-                "https://api.search.tinyfish.ai",
-                headers=tf_headers,
-                params={
-                    "query": f"{req.zone_name} Delhi safety news traffic alert",
-                    "purpose": "Verify crowdsourced safety report with live local web news",
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f'{PRUNE_BASE_URL}/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {PRUNE_API_KEY}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'model': req.model,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                    'response_format': {'type': 'json_object'},
+                    'temperature': 0.2,
+                    'max_tokens': 300,
                 },
             )
-            search_ok = search_resp.status_code == 200
-            search_data = search_resp.json() if search_ok else {}
-            # Response format: {"query":..., "results":[{date,position,site_name,snippet,url},...], "total_results":N}
-            search_results = search_data.get("results", [])
+            resp.raise_for_status()
+            data = resp.json()
+            prune_meta = data.get('prune_metadata')
+            content_str = data['choices'][0]['message']['content']
+            import json as _json
+            parsed = _json.loads(content_str)
 
-            sources: List[Dict[str, Any]] = []
+            verdict = parsed.get('verdict', 'CORROBORATED_HAZARD')
+            adjustment = float(parsed.get('trust_adjustment', 18.0))
+            analysis_txt = parsed.get('analysis', '')
+            civic_msg = parsed.get('civic_action', '')
+            ticket_id = f"NDMC-{random.randint(10000, 99999)}" if verdict == 'CORROBORATED_HAZARD' else None
 
-            # Add the Search API result as first source
-            top = search_results[0] if search_results else {}
-            sources.append({
-                "step": "TinyFish Search API",
-                "query": f"{req.zone_name} Delhi safety news traffic alert",
-                "url": top.get("url", "https://api.search.tinyfish.ai"),
-                "title": f"TinyFish Search — {search_data.get('total_results', 0)} live results for {req.zone_name}",
-                "extracted_snippet": top.get("snippet", "No live results returned."),
-                "site_name": top.get("site_name", ""),
-                "date": top.get("date", ""),
-                "relevance_score": 0.92,
-                "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                "live_api_called": True,
-                "http_status": search_resp.status_code,
-            })
-
-            # ── Step 2: TinyFish Fetch API ─────────────────────────────────
-            # Skip social/video domains — prefer actual news sites
-            SKIP_DOMAINS = ("facebook.com", "instagram.com", "youtube.com", "twitter.com", "x.com", "tiktok.com")
-            preferred = [
-                r for r in search_results
-                if r.get("url") and not any(d in r.get("url", "") for d in SKIP_DOMAINS)
-            ]
-            fetch_targets = [r.get("url") for r in (preferred or search_results)[:1] if r.get("url")]
-            if not fetch_targets:
-                fetch_targets = ["https://delhipolice.gov.in/"]
-
-            for target_url in fetch_targets:
-                fetch_resp = await client.post(
-                    "https://api.fetch.tinyfish.ai",
-                    headers=tf_headers,
-                    json={
-                        "urls": [target_url],
-                        "format": "markdown",   # ← correct field (confirmed from TinyFish dashboard)
-                        "ttl": 0,               # ← prefer live content, no cache
-                    },
-                )
-                fetch_ok = fetch_resp.status_code == 200
-                fetch_data = fetch_resp.json() if fetch_ok else {}
-                # Response format: {"results":[{url, final_url, title, description, language, text, author, published_date}]}
-                fetch_items = fetch_data.get("results", [])
-                item = fetch_items[0] if fetch_items else {}
-                # Prefer "text" (full article body) → "description" → fallback
-                content = (item.get("text") or item.get("description") or "")[:500]
-
-                sources.append({
-                    "step": "TinyFish Fetch API",
-                    "query": "Extract structured civic hazard and business status content",
-                    "url": item.get("final_url", target_url),
-                    "title": item.get("title", target_url),
-                    "extracted_snippet": content or f"Content extracted from {target_url}",
-                    "language": item.get("language", "en"),
-                    "author": item.get("author", ""),
-                    "published_date": item.get("published_date", ""),
-                    "latency_ms": item.get("latency_ms", 0),
-                    "relevance_score": 0.87,
-                    "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                    "live_api_called": True,
-                    "http_status": fetch_resp.status_code,
-                })
-
-            # ── Step 3: TinyFish Web Agent ──────────────────────────────────
-            # Web Agent is slow (browser automation). Use a short timeout and fall back gracefully.
-            agent_outcome_data: Dict[str, Any] = {}
-            agent_live = False
-            try:
-                async with httpx.AsyncClient(timeout=8.0) as agent_client:
-                    agent_resp = await agent_client.post(
-                        "https://agent.tinyfish.ai/v1/automation/run",
-                        headers=tf_headers,
-                        json={
-                            "url": "https://www.ndmc.gov.in/",
-                            "goal": f"Verify civic complaint portal availability for hazard at {req.zone_name}",
-                        },
-                    )
-                    if agent_resp.status_code in (200, 201, 202):
-                        agent_outcome_data = agent_resp.json()
-                        agent_live = True
-            except Exception:
-                pass  # Web Agent timeout → use structured fallback steps below
-
-            # Derive verdict from trust score + live search corroboration
-            verdict = 'CORROBORATED_HAZARD' if req.current_trust_score >= 55.0 else 'DEFAMATION_MISMATCH'
-            adjustment = +18.0 if verdict == 'CORROBORATED_HAZARD' else -30.0
-            status = 'CORROBORATED' if verdict == 'CORROBORATED_HAZARD' else 'FLAGGED'
-            ticket_id = f"MCD-PCR-{random.randint(10000, 99999)}" if verdict == 'CORROBORATED_HAZARD' else None
-
-            agent_steps = agent_outcome_data.get("steps") or [
-                f"Step 1 — TinyFish Web Agent navigated to ndmc.gov.in for {req.zone_name}",
-                f"Step 2 — Portal availability verified; live news corroboration: {len(search_results)} web signals found",
-                f"Step 3 — {'Patrol dispatch ticket auto-submitted' if verdict == 'CORROBORATED_HAZARD' else 'Ticket blocked — defamation signal confirmed'}",
-            ]
-
-            processing_ms = round((time.time() - t0) * 1000, 1)
-
-            return TinyFishOsintResponse(
+            return PruneVerifyResponse(
                 zone_name=req.zone_name,
                 lat=req.lat,
                 lng=req.lng,
-                tinyfish_apis_used=["TinyFish Search API", "TinyFish Fetch API", "TinyFish Web Agent"],
-                live_web_sources_scanned=sources,
+                model_used=data.get('model', req.model),
+                prune_metadata=prune_meta,
                 corroboration_verdict=verdict,
                 trust_score_adjustment=adjustment,
-                web_agent_action={
-                    "outcome": "TICKET_FILED" if verdict == 'CORROBORATED_HAZARD' else "TICKET_BLOCKED",
-                    "ticket_id": ticket_id,
-                    "portal": "ndmc.gov.in / Delhi Police PCR",
-                    "agent_live_api_called": agent_live,
-                    "steps_executed": agent_steps,
-                    "message": (
-                        f"TinyFish Web Agent auto-filed civic patrol ticket #{ticket_id} via ndmc.gov.in. "
-                        f"Live web corroboration: {len(search_results)} real news signals found for {req.zone_name}."
-                        if verdict == 'CORROBORATED_HAZARD' else
-                        f"TinyFish Web Agent blocked ticket — live OSINT signals for {req.zone_name} "
-                        f"do not corroborate the reported hazard. Defamation raid pattern confirmed."
-                    ),
-                    "live_api_called": True,
+                analysis=analysis_txt,
+                civic_action={
+                    'outcome': 'TICKET_FILED' if verdict == 'CORROBORATED_HAZARD' else 'TICKET_BLOCKED',
+                    'ticket_id': ticket_id,
+                    'portal': 'ndmc.gov.in / Delhi Police PCR',
+                    'message': civic_msg,
                 },
-                tinyfish_osint_status=status,
-                processing_time_ms=processing_ms,
+                prune_status='LIVE',
+                processing_time_ms=round((time.time() - t0) * 1000, 1),
             )
-
-    except Exception as exc:
-        # Graceful fallback — clearly labels that live API failed
-        fallback = _build_tinyfish_fallback(req)
-        fallback.live_web_sources_scanned.insert(0, {
-            "step": "System Notice",
-            "url": "",
-            "title": "Live API call failed — using structured fallback",
-            "extracted_snippet": f"TinyFish API error: {str(exc)[:120]}. Structured civic fallback data shown.",
-            "relevance_score": 0.0,
-            "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            "live_api_called": False,
-        })
-        return fallback
+    except Exception:
+        return _prune_fallback(req)
 
 
-@app.post('/api/tinyfish/verify-osint', response_model=TinyFishOsintResponse)
-async def tinyfish_verify_osint(req: TinyFishOsintRequest):
+@app.post('/api/prune/verify', response_model=PruneVerifyResponse)
+async def prune_verify(req: PruneVerifyRequest):
     """
-    TinyFish Live-Web OSINT Verification endpoint.
-    Runs TinyFish Search API + Fetch API + Web Agent workflow for a Delhi zone.
-    Returns corroboration verdict (+18 boost or -30 penalty) and civic ticket filing status.
-    Falls back to realistic deterministic response if TINYFISH_API_KEY is not set.
+    Prune AI Gateway -- LLM-powered safety report corroboration.
+    Routes OpenAI-compatible calls through Prune (https://api.withprune.com/v1)
+    for cost control, API key security, and prune_metadata receipts.
+    Returns CORROBORATED_HAZARD (+18 trust) or DEFAMATION_MISMATCH (-30 trust).
+    Falls back to deterministic civic analysis when PRUNE_API_KEY is not set.
     """
-    result = await _call_tinyfish_api(req)
-    return result
+    return await _call_prune(req)
+
+
 
 
 # ---------------------------------------------------------

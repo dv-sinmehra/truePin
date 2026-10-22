@@ -53,9 +53,13 @@ const CURL_SNIPPET = `curl -X POST ${API_BASE}/api/report \\
 const ENDPOINTS = [
   { method: 'POST', path: '/api/report', desc: 'Submit a report through the 5-layer pipeline. Returns full verdict + layer scores.' },
   { method: 'GET',  path: '/api/state', desc: 'Get all active reports, live metrics, baseline nodes, and trust graph snapshot.' },
-  { method: 'POST', path: '/api/simulate/{scenario}', desc: 'Run an adversarial scenario. Options: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift' },
-  { method: 'POST', path: '/api/reset', desc: 'Clear all reports and reset system state.' },
-  { method: 'GET',  path: '/api/osm/fetch-live', desc: 'Fetch live OpenStreetMap civic nodes (police stations, metro gates) in Central Delhi.' },
+  { method: 'POST', path: '/api/simulate/{scenario}', desc: 'Run an adversarial scenario. Options: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift, quarantined_sos' },
+  { method: 'POST', path: '/api/reset', desc: 'Clear all reports, review log, and reset system state.' },
+  { method: 'POST', path: '/api/prune/verify', desc: 'Prune AI Gateway — LLM-powered corroboration via withprune.com. Returns CORROBORATED_HAZARD / DEFAMATION_MISMATCH with prune_metadata receipt.' },
+  { method: 'GET',  path: '/api/review-queue', desc: 'False-Positive Review Queue — returns unreviewed QUARANTINED/SOFT_ALERT reports. SOS priority first, then lowest score first.' },
+  { method: 'POST', path: '/api/review/{report_id}', desc: 'Human moderator decision: release (shows on AFTER map, trust +5) or confirm (stays quarantined, trust -5). Requires non-empty note.' },
+  { method: 'GET',  path: '/api/review-log', desc: 'Audit trail of all human review decisions with timestamps.' },
+  { method: 'POST', path: '/api/review/bulk-release', desc: 'Bulk release all QUARANTINED reports matching a given ASN/network group.' },
   { method: 'POST', path: '/api/benchmark/run', desc: 'Run the 1,200-row Delhi benchmark dataset through the pipeline. Returns confusion matrix and metrics.' },
   { method: 'POST', path: '/api/benchmark/upload-csv', desc: 'Upload a custom CSV (needs lat, lng columns) and run the pipeline on it.' },
   { method: 'GET',  path: '/api/benchmark/download-csv', desc: 'Download the 1,200-row benchmark CSV.' },
@@ -265,7 +269,7 @@ export default function ApiPage() {
             </div>
             <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
               <div>✅ Up to <strong className="text-slate-200">500,000 verifications/mo</strong></div>
-              <div>🐟 <strong className="text-cyan-300">TinyFish Live-Web OSINT enrichment</strong> included</div>
+              <div>🌿 <strong className="text-violet-300">Prune AI Gateway corroboration</strong> included</div>
               <div>🎯 Target: Safetipin, Google Maps, Rapido/Ola</div>
               <div>⚡ &lt;200ms P95 latency SLA</div>
               <div>📈 Real-time metrics + trust graph webhook</div>
