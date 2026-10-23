@@ -214,6 +214,32 @@ if _MCP_AVAILABLE:
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
 
+    @mcp.tool()
+    async def analyze_and_explain(
+        verdict: str,
+        final_score: float,
+        zone_name: str = "Delhi",
+        layer_log: list = [],
+        osint_verdict: str = "",
+        report_type: str = "INCIDENT"
+    ) -> dict:
+        """
+        Use Gemini Flash LLM to explain WHY a safety report received its verdict
+        and recommend the appropriate civic authority action.
+        Returns structured JSON with ai_explanation, ai_confidence, ai_recommendation.
+        Falls back gracefully to rule-based analysis when GEMINI_API_KEY is not set.
+        """
+        return await skill_registry.execute(
+            "ai_reasoner",
+            mode="explain_verdict",
+            verdict=verdict,
+            final_score=final_score,
+            zone_name=zone_name,
+            layer_log=layer_log,
+            osint_verdict=osint_verdict,
+            report_type=report_type,
+        )
+
     def get_mcp_asgi_app():
         """Return the ASGI app for mounting into FastAPI at /mcp."""
         return mcp.streamable_http_app()

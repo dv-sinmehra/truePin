@@ -36,6 +36,7 @@ from skills.trust_scorer import TrustScorerSkill
 from skills.osint_agent import OsintAgentSkill
 from skills.anomaly_detector import AnomalyDetectorSkill
 from skills.civic_reporter import CivicReporterSkill
+from skills.ai_reasoner import AiReasonerSkill
 from agent import run_agent
 
 # Register all skills at startup
@@ -43,6 +44,10 @@ skill_registry.register(TrustScorerSkill())
 skill_registry.register(OsintAgentSkill())
 skill_registry.register(AnomalyDetectorSkill())
 skill_registry.register(CivicReporterSkill())
+skill_registry.register(AiReasonerSkill())
+
+# Gemini API key (ai_reasoner skill; set in Render env vars)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # MCP Server (mounted at /mcp after app creation)
 from mcp_server import get_mcp_asgi_app

@@ -69,6 +69,7 @@
 | `backend/skills/osint_agent.py` | `osint_agent` skill — wraps TinyFish OSINT pipeline |
 | `backend/skills/anomaly_detector.py` | `anomaly_detector` skill — DBSCAN + IsolationForest batch analysis |
 | `backend/skills/civic_reporter.py` | `civic_reporter` skill — auto-file patrol dispatch tickets |
+| `backend/skills/ai_reasoner.py` | `ai_reasoner` skill — **Gemini Flash LLM** explains verdicts, recommends civic action, routes agent |
 | `frontend/src/pages/TinyFishPage.jsx` | TinyFish OSINT live-web agent panel |
 | `frontend/src/pages/ApiPage.jsx` | REST API reference + B2B revenue model |
 | `frontend/src/components/DualMaps.jsx` | Leaflet BEFORE / AFTER dual map |
@@ -97,6 +98,7 @@ Any MCP-compatible client (Claude Desktop, Cursor, etc.) can connect and call th
 | `file_civic_ticket` | Auto-file MCD / Delhi Police patrol dispatch ticket via TinyFish Web Agent |
 | `list_skills` | Discover all registered skills with names, descriptions, versions, schemas |
 | `get_system_metrics` | Live trust-engine KPIs: fake detection rate, map reliability, verdict distribution |
+| `analyze_and_explain` | **Gemini Flash LLM** — explains WHY a report got its verdict + recommends civic action |
 
 ### Skills Registry — `backend/skills/`
 
@@ -110,6 +112,7 @@ skills/
   osint_agent.py       # osint_agent skill
   anomaly_detector.py  # anomaly_detector skill
   civic_reporter.py    # civic_reporter skill
+  ai_reasoner.py       # ai_reasoner skill — Gemini Flash LLM reasoning
 ```
 
 **REST access:**
@@ -129,7 +132,8 @@ ANSWER → return structured trace + final answer
 ```
 
 Supports pre-defined plans (e.g. `full_verify`: trust_scorer → osint_agent → civic_reporter)
-and dynamic keyword-based skill routing for novel tasks.
+and dynamic skill routing — **Gemini Flash LLM-powered routing** when `GEMINI_API_KEY` is set,
+keyword-based fallback routing otherwise.
 
 **REST access:**
 - `POST /api/agent/run` — run agent with `{task, context, max_steps}`
@@ -162,6 +166,7 @@ TinyFish is used as the live-web intelligence layer:
 **Environment variables required (set in Render dashboard):**
 ```
 TINYFISH_API_KEY=<set in Render backend service env vars>
+GEMINI_API_KEY=<get free key from aistudio.google.com/app/apikey — powers ai_reasoner skill>
 ```
 
 ---
@@ -183,6 +188,7 @@ TINYFISH_API_KEY=<set in Render backend service env vars>
 | **python-dotenv** | ≥ 1.0.0 | Local `.env` file loading |
 | **python-multipart** | ≥ 0.0.9 | CSV file upload support |
 | **starlette** | ≥ 0.37.0 | ASGI mounting for MCP server |
+| **google-generativeai** | ≥ 0.7.0 | **Gemini Flash LLM SDK** — powers `ai_reasoner` skill |
 
 ### Frontend (React)
 
@@ -232,6 +238,19 @@ TINYFISH_API_KEY=<set in Render backend service env vars>
 | **Provider** | TinyFish AI (external) |
 | **Role** | Corroborates safety reports; auto-files civic patrol tickets |
 | **Output** | Structured JSON verdict with trust delta and civic ticket ID |
+
+### Google Gemini Flash — `ai_reasoner` Skill
+
+| Property | Value |
+|---|---|
+| **Model** | `gemini-1.5-flash` (Google AI Studio) |
+| **Type** | Large Language Model — genuine AI reasoning layer |
+| **SDK** | `google-generativeai >= 0.7.0` |
+| **Modes** | `explain_verdict` · `recommend_action` · `route_task` |
+| **Role** | Explains WHY a verdict was issued; recommends civic action; LLM-routes the ReAct agent |
+| **Response format** | Forced JSON (`response_mime_type="application/json"`) |
+| **Fallback** | Rule-based keyword analysis if `GEMINI_API_KEY` not set |
+| **Key source** | Free from aistudio.google.com/app/apikey |
 
 > No custom LLM was trained or fine-tuned. No model checkpoint (`.pt`, `.pkl`, `.onnx`) is committed to the repository. scikit-learn models are built in-memory at server start.
 
@@ -294,9 +313,11 @@ TINYFISH_API_KEY=<set in Render backend service env vars>
 
 1. **Real MCP server** — `mcp==2.3.0`, MCPServer with Streamable HTTP transport, 6 tools, mounted at `/mcp` inside FastAPI. Any MCP client can connect.
 
-2. **Real Skills Registry** — `SkillsRegistry` singleton with `Skill` base class, typed input schemas, `register()` / `execute()` / `list_all()`. Four production skills: `trust_scorer`, `osint_agent`, `anomaly_detector`, `civic_reporter`.
+2. **Real Skills Registry** — `SkillsRegistry` singleton with `Skill` base class, typed input schemas, `register()` / `execute()` / `list_all()`. **Five production skills:** `trust_scorer`, `osint_agent`, `anomaly_detector`, `civic_reporter`, `ai_reasoner`.
 
-3. **Real Agent Runtime** — `agent.py` implements THINK→ACT→OBS ReAct loop with pre-defined plans and keyword-based dynamic routing. Returns full reasoning trace per step.
+3. **Real Agent Runtime** — `agent.py` implements THINK→ACT→OBS ReAct loop with pre-defined plans and **Gemini Flash LLM-powered dynamic routing** (keyword fallback when key absent). Returns full reasoning trace per step.
+
+4. **Real LLM AI skill** — `ai_reasoner` uses Gemini Flash to explain verdicts in natural language, recommend civic authority actions, and route the agent. Returns structured JSON with `ai_powered: true` and model name.
 
 4. **Additive pipeline** — all 5 layers run independently and scores compound. No single-point-of-failure.
 
@@ -334,3 +355,6 @@ TINYFISH_API_KEY=<set in Render backend service env vars>
 | 2026-10-23 | Add: **ReAct Agent Runtime** (`agent.py` — THINK→ACT→OBS loop, pre-defined plans) | this commit |
 | 2026-10-23 | Add: `/api/skills`, `/api/skills/{name}/run`, `/api/agent/run`, `/api/agent/plans` endpoints | this commit |
 | 2026-10-23 | Update: hackathon name → Prompt-ae-thon; update log.md to reflect real MCP/skills/agent | this commit |
+| 2026-10-23 | Add: `ai_reasoner` skill — **Gemini Flash LLM** explains verdicts, routes agent, recommends civic action | pending push |
+| 2026-10-23 | Add: 7th MCP tool `analyze_and_explain` — calls Gemini Flash via `ai_reasoner` skill | pending push |
+| 2026-10-23 | Add: `google-generativeai>=0.7.0` to `requirements.txt` | pending push |
