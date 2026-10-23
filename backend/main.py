@@ -26,6 +26,28 @@ TINYFISH_API_KEY = os.environ.get('TINYFISH_API_KEY', '')
 TINYFISH_BASE_URL = 'https://api.tinyfish.io'
 
 # ---------------------------------------------------------
+# Skills Registry + Agent Runtime + MCP Server
+# ---------------------------------------------------------
+import sys, pathlib as _pathlib
+sys.path.insert(0, str(_pathlib.Path(__file__).parent))
+
+from skills.registry import skill_registry
+from skills.trust_scorer import TrustScorerSkill
+from skills.osint_agent import OsintAgentSkill
+from skills.anomaly_detector import AnomalyDetectorSkill
+from skills.civic_reporter import CivicReporterSkill
+from agent import run_agent
+
+# Register all skills at startup
+skill_registry.register(TrustScorerSkill())
+skill_registry.register(OsintAgentSkill())
+skill_registry.register(AnomalyDetectorSkill())
+skill_registry.register(CivicReporterSkill())
+
+# MCP Server (mounted at /mcp after app creation)
+from mcp_server import get_mcp_asgi_app
+
+# ---------------------------------------------------------
 # Pydantic Models
 # ---------------------------------------------------------
 class Report(BaseModel):
@@ -164,6 +186,9 @@ ISO_FOREST = IsolationForest(contamination=0.12, random_state=42).fit(baseline_d
 # FastAPI App Setup
 # ---------------------------------------------------------
 app = FastAPI(title='AEGIS-MAP Trust Engine')
+# Mount the real MCP server at /mcp
+app.mount('/mcp', get_mcp_asgi_app())
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -1408,3 +1433,68 @@ def benchmark_download_csv():
         media_type='text/csv',
     )
 
+
+
+# =============================================================================
+# Skills Registry API
+# =============================================================================
+
+@app.get('/api/skills')
+async def list_skills_endpoint():
+    """Return all registered truePin skills: names, descriptions, versions, schemas."""
+    return {
+        'skills':         skill_registry.list_all(),
+        'total':          len(skill_registry.names()),
+        'skill_names':    skill_registry.names(),
+        'mcp_endpoint':   '/mcp',
+        'agent_endpoint': '/api/agent/run',
+    }
+
+
+@app.post('/api/skills/{skill_name}/run')
+async def run_skill_endpoint(skill_name: str, body: Dict[str, Any]):
+    """Directly execute a named skill. Body keys must match the skill's input_schema."""
+    if skill_name not in skill_registry:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{skill_name}' not found. Available: {skill_registry.names()}",
+        )
+    return await skill_registry.execute(skill_name, **body)
+
+
+# =============================================================================
+# Agent Runtime API
+# =============================================================================
+
+class AgentRunRequest(BaseModel):
+    task: str
+    context: Dict[str, Any] = {}
+    max_steps: int = 4
+
+
+@app.post('/api/agent/run')
+async def agent_run_endpoint(req: AgentRunRequest):
+    """
+    Run the truePin ReAct agent on a multi-step task.
+    The agent chains skills autonomously: trust_scorer -> osint_agent -> civic_reporter.
+    Returns step-by-step reasoning trace and a final answer.
+    """
+    return await run_agent(
+        task=req.task,
+        context=req.context,
+        max_steps=min(req.max_steps, 6),
+    )
+
+
+@app.get('/api/agent/plans')
+async def list_agent_plans():
+    """Return pre-defined multi-step plans and keyword routing rules used by the agent."""
+    from agent import TASK_PLANS, _TASK_ROUTING
+    return {
+        'predefined_plans': TASK_PLANS,
+        'routing_rules': [
+            {'keywords': r['keywords'], 'skill': r['skill'], 'reason': r['reason']}
+            for r in _TASK_ROUTING
+        ],
+        'usage': 'POST /api/agent/run with {task, context, max_steps}',
+    }
