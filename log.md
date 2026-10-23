@@ -145,9 +145,11 @@ TinyFish is used as the live-web intelligence layer:
 
 | TinyFish API | Endpoint | Role in truePin |
 |---|---|---|
-| **Search API** | `api.search.tinyfish.ai` | Live web search for Delhi-zone civic alerts, news, business density |
-| **Fetch API** | `api.fetch.tinyfish.ai` | Structured content extraction from MCD, Safetipin, Delhi Police pages |
-| **Web Agent** | `agent.tinyfish.ai/v1/automation/run` | Autonomously navigates civic portals and files patrol dispatch tickets |
+| **Search API** | `api.search.tinyfish.ai` | Live web search (India-located) for recent local news / civic alerts about the reported zone |
+| **Fetch API** | `api.fetch.tinyfish.ai` | Full-text extraction of the top search-result pages |
+| **Web Agent** | `agent.tinyfish.ai/v1/automation/run-async` + `/v1/runs/{id}` | For corroborated hazards, reads the live MCD Online portal and prepares the complaint filing path (steps, required fields, helplines). **Read-only — never submits a form.** |
+
+All calls are real and go through `backend/tinyfish.py` (auth: `X-API-Key`). There is **no mock or hardcoded fallback**: if `TINYFISH_API_KEY` is missing or TinyFish fails, the endpoint returns an error. `GET /api/tinyfish/health` proves the live connection.
 
 ---
 
@@ -236,8 +238,8 @@ GEMINI_API_KEY=<get free key from aistudio.google.com/app/apikey — powers ai_r
 |---|---|
 | **Type** | Live-web AI agent (Search + Fetch + browser-action pipeline) |
 | **Provider** | TinyFish AI (external) |
-| **Role** | Corroborates safety reports; auto-files civic patrol tickets |
-| **Output** | Structured JSON verdict with trust delta and civic ticket ID |
+| **Role** | Corroborates safety reports against live web evidence; prepares the civic complaint path (read-only) |
+| **Output** | Verdict (`CORROBORATED_HAZARD` +18 / `UNVERIFIED` 0 / `DEFAMATION_MISMATCH` −30) computed from trust score + number of live web signals, the real sources, and the Web Agent outcome (`DISPATCH_READY` / `AGENT_RUNNING` / `DISPATCH_BLOCKED` / `AGENT_FAILED`) |
 
 ### Google Gemini Flash — `ai_reasoner` Skill
 
@@ -293,7 +295,9 @@ GEMINI_API_KEY=<get free key from aistudio.google.com/app/apikey — powers ai_r
 | `POST` | `/api/agent/run` | Run ReAct agent on a multi-step task |
 | `GET` | `/api/agent/plans` | List pre-defined plans and routing rules |
 | `GET/POST` | `/mcp` | **Real MCP server** — Streamable HTTP transport |
-| `POST` | `/api/tinyfish/verify-osint` | TinyFish OSINT pipeline |
+| `POST` | `/api/tinyfish/verify-osint` | TinyFish OSINT pipeline (live Search + Fetch + Web Agent) |
+| `GET` | `/api/tinyfish/agent-run/{run_id}` | Check a Web Agent run that was still going |
+| `GET` | `/api/tinyfish/health` | Live TinyFish connectivity check |
 | `POST` | `/api/submit` | Submit a safety report through the 5-layer pipeline |
 | `GET` | `/api/state` | Live system state + metrics |
 
@@ -339,6 +343,8 @@ GEMINI_API_KEY=<get free key from aistudio.google.com/app/apikey — powers ai_r
 | Physical SIM-farm attacks | Real Jio SIMs with phone-shaker kinematic variance — may slip through as `SOFT_ALERT` (~18 cases) |
 | False suppression rate | ~0.9% — within < 1% target |
 | In-memory state | Reports and trust scores lost on server restart (Render free tier sleeps after inactivity) |
+| TinyFish Web Agent latency | Browser runs take ~30 s to a few minutes; `verify-osint` waits up to `TINYFISH_AGENT_MAX_WAIT` (75 s) then returns the `run_id` |
+| Civic complaints not auto-filed | The Web Agent deliberately does not submit forms on government portals, so no real ticket numbers are produced |
 
 ---
 
@@ -358,3 +364,4 @@ GEMINI_API_KEY=<get free key from aistudio.google.com/app/apikey — powers ai_r
 | 2026-10-23 | Add: `ai_reasoner` skill — **Gemini Flash LLM** explains verdicts, routes agent, recommends civic action | pending push |
 | 2026-10-23 | Add: 7th MCP tool `analyze_and_explain` — calls Gemini Flash via `ai_reasoner` skill | pending push |
 | 2026-10-23 | Add: `google-generativeai>=0.7.0` to `requirements.txt` | pending push |
+| 2026-10-23 | Fix: **TinyFish now uses real API calls only** — removed hardcoded fallback data, fake source URLs and random ticket IDs; fixed `Bearer` → `X-API-Key` auth and too-short timeouts; verdict now uses live web evidence; Web Agent runs async and is read-only; added `/api/tinyfish/health` and `/api/tinyfish/agent-run/{id}` | this commit |

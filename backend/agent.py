@@ -361,6 +361,10 @@ def _merge_context(acc: Dict[str, Any], skill_name: str, result: Dict[str, Any])
         acc["osint_verdict"]   = result.get("corroboration_verdict")
         acc["trust_score_delta"] = result.get("trust_score_delta", 0)
         acc["ticket_id"]       = result.get("ticket_id")
+        acc["web_agent_outcome"] = result.get("web_agent_outcome")
+        acc["web_agent_message"] = result.get("web_agent_message")
+        if result.get("success") is False:
+            acc["osint_error"] = result.get("error")
         acc["osint_sources"]   = result.get("sources", [])
 
     if skill_name == "anomaly_detector":
@@ -383,8 +387,8 @@ def _build_answer(task: str, steps: List[Dict], acc: Dict[str, Any]) -> str:
             parts.append(f"Risk level: {acc['ai_risk_level']}.")
         if acc.get("ai_recommendation"):
             parts.append(f"Recommendation: {acc['ai_recommendation']}")
-        if acc.get("ticket_id"):
-            parts.append(f"Civic patrol ticket filed: #{acc['ticket_id']}.")
+        if acc.get("web_agent_message"):
+            parts.append(acc["web_agent_message"])
         return " ".join(parts)
 
     # Fallback: rule-based summary
@@ -397,8 +401,10 @@ def _build_answer(task: str, steps: List[Dict], acc: Dict[str, Any]) -> str:
             f"OSINT corroboration: {acc['osint_verdict']} "
             f"({'+'if delta >= 0 else ''}{delta} trust delta)."
         )
-    if acc.get("ticket_id"):
-        parts.append(f"Civic patrol ticket filed: #{acc['ticket_id']}.")
+    if acc.get("web_agent_message"):
+        parts.append(acc["web_agent_message"])
+    if acc.get("osint_error"):
+        parts.append(f"TinyFish OSINT failed: {acc['osint_error']}.")
     if "anomaly_verdict" in acc:
         parts.append(f"Anomaly analysis: {acc['anomaly_verdict']}.")
     return " ".join(parts)

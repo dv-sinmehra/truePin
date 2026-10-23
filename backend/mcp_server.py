@@ -11,7 +11,7 @@ Judges / MCP clients can connect to:
 
 Tools exposed:
   - verify_safety_report   → 5-layer trust pipeline
-  - run_osint_corroboration → TinyFish Search + Fetch + Web Agent
+  - run_osint_corroboration → TinyFish Search + Fetch + Web Agent (live)
   - detect_anomalies       → DBSCAN + IsolationForest batch analysis
   - file_civic_ticket      → MCD / Delhi Police patrol dispatch
   - list_skills            → Discovery — returns all registered skills
@@ -97,12 +97,14 @@ if _MCP_AVAILABLE:
         """
         Run TinyFish Search API + Fetch API + Web Agent OSINT pipeline for a Delhi zone.
 
-        - TinyFish Search API: queries live web for civic alerts, safety scores, patrol advisories
-        - TinyFish Fetch API:  extracts structured content from MCD, Safetipin, Delhi Police pages
-        - TinyFish Web Agent:  autonomously files a patrol dispatch ticket on MCD Online portal
+        Real TinyFish API calls (no mock data):
+        - TinyFish Search API: queries the live web for local news / civic alerts for the zone
+        - TinyFish Fetch API:  extracts the full text of the top result pages
+        - TinyFish Web Agent:  for corroborated hazards, reads the live MCD Online portal and
+                               prepares the complaint filing path (read-only, never submits)
 
-        Returns: CORROBORATED_HAZARD (+18 trust) or DEFAMATION_MISMATCH (-30 trust),
-        live web sources, and a civic ticket ID.
+        Returns: CORROBORATED_HAZARD (+18), UNVERIFIED (0) or DEFAMATION_MISMATCH (-30),
+        the real web sources found, and the Web Agent outcome. Errors are returned, not faked.
         """
         return await skill_registry.execute(
             "osint_agent",
@@ -146,11 +148,11 @@ if _MCP_AVAILABLE:
         notes: str = "",
     ) -> Dict[str, Any]:
         """
-        File an automated patrol dispatch ticket on MCD Online / Delhi Police PCR portal.
+        Prepare a civic patrol / complaint dispatch on the MCD Online portal.
 
-        Uses TinyFish Web Agent to autonomously navigate to the civic portal,
-        fill the complaint form, and submit it.  Returns ticket_id, portal, and steps executed.
-        Falls back to a simulated ticket if TINYFISH_API_KEY is not set.
+        Uses the live TinyFish Web Agent to open the civic portal, find the complaint page and
+        read the filing steps, required fields and helplines. Read-only: it never submits a form.
+        Returns outcome, complaint page, steps and the TinyFish run_id. Errors are returned, not faked.
         """
         return await skill_registry.execute(
             "civic_reporter",

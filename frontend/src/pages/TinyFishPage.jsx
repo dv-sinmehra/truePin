@@ -59,7 +59,7 @@ const DELHI_ZONES = [
 const STEP_LABELS = [
   { id: 1, api: 'TinyFish Search API', icon: '🔍', desc: 'Querying live web for hyperlocal civic/news/business signals…' },
   { id: 2, api: 'TinyFish Fetch API',  icon: '📄', desc: 'Extracting structured AI-ready content from live web pages…' },
-  { id: 3, api: 'TinyFish Web Agent',  icon: '🤖', desc: 'Filing automated civic patrol/dispatch ticket on municipal portal…' },
+  { id: 3, api: 'TinyFish Web Agent',  icon: '🤖', desc: 'Reading the live MCD civic portal to prepare the complaint (read-only)…' },
 ]
 
 export default function TinyFishPage({ API, selectedReport }) {
@@ -84,11 +84,9 @@ export default function TinyFishPage({ API, selectedReport }) {
     setResult(null)
     setError(null)
 
-    // Simulate 3-step visual progress
-    for (let s = 1; s <= 3; s++) {
-      setStep(s)
-      await new Promise(r => setTimeout(r, 900))
-    }
+    // Advance the step indicator while the real (slow) request is in flight
+    setStep(1)
+    const timers = [setTimeout(() => setStep(2), 6000), setTimeout(() => setStep(3), 15000)]
 
     try {
       const res = await fetch(`${API}/api/tinyfish/verify-osint`, {
@@ -102,7 +100,11 @@ export default function TinyFishPage({ API, selectedReport }) {
           current_trust_score: trustScore,
         }),
       })
-      if (!res.ok) throw new Error(`Backend returned ${res.status}`)
+      if (!res.ok) {
+        let detail = ''
+        try { detail = (await res.json()).detail } catch { /* not JSON */ }
+        throw new Error(detail || `Backend returned ${res.status}`)
+      }
       const data = await res.json()
       setResult(data)
       setStep(4)
@@ -110,13 +112,46 @@ export default function TinyFishPage({ API, selectedReport }) {
       setError(e.message)
       setStep(0)
     } finally {
+      timers.forEach(clearTimeout)
       setRunning(false)
     }
   }
 
-  const verdictStyle = result?.corroboration_verdict === 'CORROBORATED_HAZARD'
-    ? { bg: 'bg-emerald-950/60 border-emerald-600', text: 'text-emerald-400', badge: 'bg-emerald-800 text-emerald-200' }
-    : { bg: 'bg-red-950/60 border-red-700', text: 'text-red-400', badge: 'bg-red-800 text-red-200' }
+  // Web Agent may still be running when verify-osint returns — let the user check again
+  const [checkingAgent, setCheckingAgent] = useState(false)
+  const checkAgentRun = async () => {
+    const runId = result?.web_agent_action?.run_id
+    if (!runId) return
+    setCheckingAgent(true)
+    try {
+      const res = await fetch(`${API}/api/tinyfish/agent-run/${runId}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Backend returned ${res.status}`)
+      setResult(r => ({ ...r, web_agent_action: { ...r.web_agent_action, ...data } }))
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCheckingAgent(false)
+    }
+  }
+
+  const VERDICT_STYLES = {
+    CORROBORATED_HAZARD: { bg: 'bg-emerald-950/60 border-emerald-600', text: 'text-emerald-400', badge: 'bg-emerald-800 text-emerald-200' },
+    UNVERIFIED:          { bg: 'bg-yellow-950/40 border-yellow-700',   text: 'text-yellow-300',  badge: 'bg-yellow-800 text-yellow-100' },
+    DEFAMATION_MISMATCH: { bg: 'bg-red-950/60 border-red-700',         text: 'text-red-400',     badge: 'bg-red-800 text-red-200' },
+  }
+  const VERDICT_TITLES = {
+    CORROBORATED_HAZARD: '✅ CORROBORATED HAZARD — live web evidence supports this report',
+    UNVERIFIED:          '⚠️ UNVERIFIED — no matching live web evidence found yet',
+    DEFAMATION_MISMATCH: '🚫 DEFAMATION MISMATCH — low trust and no live web evidence',
+  }
+  const verdictStyle = VERDICT_STYLES[result?.corroboration_verdict] || VERDICT_STYLES.DEFAMATION_MISMATCH
+  const agentOutcome = result?.web_agent_action?.outcome
+  const agentBadge = agentOutcome === 'DISPATCH_READY'
+    ? 'bg-emerald-900 text-emerald-300'
+    : agentOutcome === 'AGENT_RUNNING'
+    ? 'bg-yellow-900 text-yellow-300'
+    : 'bg-red-900 text-red-300'
 
   return (
     <div className="h-full overflow-y-auto p-5 space-y-5 max-w-4xl">
@@ -175,7 +210,7 @@ export default function TinyFishPage({ API, selectedReport }) {
         {/* Trust score + report type */}
         <div className="flex flex-wrap gap-4 items-end">
           <div>
-            <div className="text-[10px] text-slate-400 mb-1">Current Trust Score (simulate)</div>
+            <div className="text-[10px] text-slate-400 mb-1">Current Trust Score (from the trust engine)</div>
             <div className="flex items-center gap-2">
               <input
                 type="range" min="0" max="100" value={trustScore}
@@ -183,7 +218,7 @@ export default function TinyFishPage({ API, selectedReport }) {
                 className="w-32 accent-cyan-500"
               />
               <span className={`text-xs font-bold ${trustScore >= 55 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {trustScore} — {trustScore >= 55 ? 'CORROBORATED_HAZARD (+18)' : 'DEFAMATION_MISMATCH (−30)'}
+                {trustScore} — {trustScore >= 55 ? 'needs ≥1 live web signal to corroborate' : 'needs ≥2 live web signals to corroborate'}
               </span>
             </div>
           </div>
@@ -264,12 +299,11 @@ export default function TinyFishPage({ API, selectedReport }) {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <div className={`text-sm font-bold ${verdictStyle.text}`}>
-                {result.corroboration_verdict === 'CORROBORATED_HAZARD'
-                  ? '✅ CORROBORATED HAZARD — Soft Alert → VERIFIED'
-                  : '🚫 DEFAMATION MISMATCH — Fake Business Defamation Raid Blocked'}
+                {VERDICT_TITLES[result.corroboration_verdict] || result.corroboration_verdict}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
                 Zone: {result.zone_name} · ({result.lat?.toFixed(4)}, {result.lng?.toFixed(4)}) ·
+                Live web signals: {result.corroboration_signals ?? 0} ·
                 Processing time: {result.processing_time_ms?.toFixed(0)}ms
               </div>
             </div>
@@ -375,15 +409,17 @@ export default function TinyFishPage({ API, selectedReport }) {
                     )}
 
                     {/* Row 4: Source URL (truncated, clickable) */}
-                    <a
-                      href={src.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[8px] text-slate-500 hover:text-cyan-400 font-mono truncate block transition"
-                      title={src.url}
-                    >
-                      ↗ {src.url.length > 80 ? src.url.slice(0, 80) + '…' : src.url}
-                    </a>
+                    {src.url && (
+                      <a
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[8px] text-slate-500 hover:text-cyan-400 font-mono truncate block transition"
+                        title={src.url}
+                      >
+                        ↗ {src.url.length > 80 ? src.url.slice(0, 80) + '…' : src.url}
+                      </a>
+                    )}
                   </div>
                 )
               })}
@@ -392,24 +428,29 @@ export default function TinyFishPage({ API, selectedReport }) {
 
           {/* Web Agent action */}
           <div>
-            <div className="text-[10px] font-bold text-slate-300 mb-2">🤖 TinyFish Web Agent — Civic Ticket</div>
+            <div className="text-[10px] font-bold text-slate-300 mb-2">🤖 TinyFish Web Agent — Civic Dispatch (read-only)</div>
             <div className="bg-slate-900/70 border border-slate-700 rounded-lg p-3 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                  result.web_agent_action?.outcome === 'TICKET_FILED'
-                    ? 'bg-emerald-900 text-emerald-300'
-                    : 'bg-red-900 text-red-300'
-                }`}>
-                  {result.web_agent_action?.outcome}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${agentBadge}`}>
+                  {agentOutcome}
                 </span>
-                {result.web_agent_action?.ticket_id && (
+                {result.web_agent_action?.run_id && (
                   <span className="text-[9px] font-mono text-cyan-300">
-                    #{result.web_agent_action.ticket_id}
+                    run {result.web_agent_action.run_id}
                   </span>
                 )}
                 <span className="text-[9px] text-slate-500">
                   Portal: {result.web_agent_action?.portal}
                 </span>
+                {agentOutcome === 'AGENT_RUNNING' && (
+                  <button
+                    onClick={checkAgentRun}
+                    disabled={checkingAgent}
+                    className="ml-auto text-[9px] font-bold px-2 py-0.5 rounded bg-yellow-800 hover:bg-yellow-700 text-yellow-100 disabled:opacity-50"
+                  >
+                    {checkingAgent ? 'Checking…' : '↻ Check agent result'}
+                  </button>
+                )}
               </div>
               {result.web_agent_action?.steps_executed?.map((step, i) => (
                 <div key={i} className="text-[9px] text-slate-400 flex items-start gap-2">

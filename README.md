@@ -117,19 +117,17 @@ Safety Pin Submitted
     │  Step 1: TinyFish Search API                     │
     │   → Query: "Delhi {zone} safety hazard           │
     │             civic streetlight 2026"              │
-    │   → Sources: MCD Online, Delhi Police, News      │
-    │   → Returns: Top 4 live web results with URLs    │
+    │   → Live news / civic alerts for the zone (IN)   │
+    │   → Returns: top real web results with URLs      │
     │                                                  │
     │  Step 2: TinyFish Fetch API                      │
-    │   → Fetches each URL returned by Search API      │
+    │   → Fetches the top 2 URLs from Search           │
     │   → Extracts clean AI-ready markdown content     │
-    │   → Sources: Safetipin, delhipolice.gov.in,      │
-    │              delhitrafficpolice.nic.in            │
     │                                                  │
     │  Step 3: TinyFish Web Agent                      │
-    │   → Goal-driven multi-step browser automation   │
-    │   → Auto-fills MCD/PCR patrol dispatch ticket   │
-    │   → Files civic infrastructure hazard report    │
+    │   → Goal-driven browser automation (async)      │
+    │   → Reads the live MCD Online complaint page    │
+    │   → Prepares filing steps (read-only, no submit)│
     └────┬────────────────────────────────────────────┘
          │
          ▼
@@ -138,12 +136,12 @@ Safety Pin Submitted
     │ CORROBORATED_HAZARD              │
     │  → Trust Score: +18             │
     │  → Soft Alert → VERIFIED        │
-    │  → Civic ticket filed           │
+    │  → Web Agent: DISPATCH_READY    │
     ├──────────────────────────────────┤
     │ DEFAMATION_MISMATCH              │
     │  → Trust Score: -30             │
     │  → Report QUARANTINED           │
-    │  → Ticket blocked               │
+    │  → Web Agent: DISPATCH_BLOCKED  │
     └──────────────────────────────────┘
 ```
 
@@ -163,119 +161,63 @@ Content-Type: application/json
 }
 ```
 
-**Response (CORROBORATED_HAZARD):**
+**Response (CORROBORATED_HAZARD)** — shape of a real response; values come from the live web:
 ```json
 {
   "zone_name": "Connaught Place",
   "lat": 28.6315,
   "lng": 77.2167,
-  "tinyfish_apis_used": [
-    "TinyFish Search API",
-    "TinyFish Fetch API",
-    "TinyFish Web Agent"
-  ],
+  "tinyfish_apis_used": ["TinyFish Search API", "TinyFish Fetch API", "TinyFish Web Agent"],
   "live_web_sources_scanned": [
     {
       "step": "TinyFish Search API",
-      "url": "https://mcdonline.nic.in/complaints/zone/connaught-place",
-      "title": "MCD Online — Connaught Place Civic Complaints Portal",
-      "extracted_snippet": "High footfall zone — frequent streetlight complaints filed on MCD portal; CCTV coverage 85%",
-      "relevance_score": 0.87,
-      "fetched_at": "2026-10-20T15:30:00Z"
+      "url": "<real result URL>",
+      "title": "<real article title>",
+      "extracted_snippet": "<search snippet>",
+      "relevance_score": 0.8,
+      "matched_keywords": ["safety", "women"],
+      "zone_mentioned": true,
+      "counts_as_signal": true,
+      "live_api_called": true
     },
-    {
-      "step": "TinyFish Fetch API",
-      "url": "https://safetipin.com/safe-city/delhi/connaught-place",
-      "title": "Safetipin — Connaught Place Safety Audit Score",
-      "extracted_snippet": "High — 200+ licensed eateries, hotels, retail. Safetipin score: 7.2/10",
-      "relevance_score": 0.82,
-      "fetched_at": "2026-10-20T15:30:01Z"
-    }
+    { "step": "TinyFish Fetch API", "url": "<same page>", "extracted_snippet": "<full page text>" }
   ],
   "corroboration_verdict": "CORROBORATED_HAZARD",
+  "corroboration_signals": 2,
   "trust_score_adjustment": 18.0,
   "web_agent_action": {
-    "outcome": "TICKET_FILED",
-    "ticket_id": "MCD-PCR-54821",
-    "portal": "mcdonline.nic.in / Delhi Police PCR",
-    "steps_executed": [
-      "Step 1 — Navigated to MCD Online portal for Connaught Place",
-      "Step 2 — Auto-filled patrol dispatch form with lat=28.6315, lng=77.2167",
-      "Step 3 — Submitted civic hazard ticket"
-    ],
-    "message": "TinyFish Web Agent successfully auto-filed Civic Patrol Dispatch ticket #MCD-PCR-54821 on Delhi Municipal Portal (mcdonline.nic.in). Patrol unit notified for Connaught Place zone."
+    "outcome": "DISPATCH_READY",
+    "run_id": "<tinyfish run id>",
+    "ticket_id": null,
+    "portal": "<complaint page the agent found>",
+    "steps_executed": ["<filing steps read from the live portal>"],
+    "message": "TinyFish Web Agent read MCD Online live and prepared the complaint filing path. Nothing was submitted."
   },
   "tinyfish_osint_status": "CORROBORATED",
-  "processing_time_ms": 312.4
+  "data_source": "tinyfish_live"
 }
 ```
 
-### Graceful Fallback
-- If `TINYFISH_API_KEY` is not set or the API is rate-limited, **truePin returns a deterministic, realistic fallback response** using zone-specific civic data.
-- Demos **never crash** — the fallback is structured identically to the real API response.
-- Set the key via: `export TINYFISH_API_KEY=your_key_here`
+### How the verdict is decided
+- A **live web signal** = a search result that mentions the zone and at least one hazard keyword (safety, harassment, streetlight, waterlogging, police …).
+- `CORROBORATED_HAZARD` (+18): ≥1 signal with trust ≥ 55, or ≥2 signals at any trust.
+- `UNVERIFIED` (0): trust ≥ 55 but no live signal yet.
+- `DEFAMATION_MISMATCH` (−30): trust < 55 and fewer than 2 signals.
+- The Web Agent (uses TinyFish credit) only runs for `CORROBORATED_HAZARD`. If it takes longer than `TINYFISH_AGENT_MAX_WAIT` (75 s), the response has `outcome: AGENT_RUNNING` and `GET /api/tinyfish/agent-run/{run_id}` returns the result later.
 
----
+### No fake data
+- Every TinyFish call is real (`backend/tinyfish.py`, `X-API-Key` auth). There is no hardcoded fallback.
+- If `TINYFISH_API_KEY` is missing or TinyFish fails, `verify-osint` returns an error (503/502/429) with the real reason.
+- `GET /api/tinyfish/health` confirms the backend can reach TinyFish.
 
-## 💰 B2B Revenue Model & Unit Economics
-
-| Tier | Name | Price | Volume | Unit Cost |
-|---|---|---|---|---|
-| 🏫 **Tier 1** | Civic & Campus Starter | ₹14,999/mo ($180) | 50K verifications/mo | ₹0.30/pin |
-| 🗺️ **Tier 2** | Navigation & Safety Apps | ₹74,999/mo ($900) | 500K verifications/mo + TinyFish OSINT | ₹0.15/pin |
-| 🏛️ **Tier 3** | Smart City & Police Enterprise | ₹12L–₹25L/year | Unlimited | Custom SLA |
-
-**Target Customers:**
-- **Tier 1:** Campus SOS apps, RWAs, NGOs, student hostels
-- **Tier 2:** Safetipin, Google Maps, Rapido/Ola ride-hailing, Himmat Plus
-- **Tier 3:** Delhi Police PCR, Dial-112, State Smart City Portals
-
-**Market Sizing:**
-- **TAM:** ₹4,200 Cr — India civic-safety API market (2026, growing 34% YoY)
-- **SAM:** ₹620 Cr — 50 municipal corps + 200 navigation/safety apps in Tier 1-2 cities
-- **SOM:** ₹18 Cr in Year 1 — Delhi NCR: 3 enterprise + 15 Tier-2 API customers
-
----
-
-## 🚀 Local Setup & Run Instructions
-
-### Prerequisites
-- Python 3.11+
-- Node.js 18+ and npm/yarn
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/dv-sinmehra/truePin.git
-cd truePin
-```
-
-### 2. Start the Backend
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-The backend will start at `http://localhost:8000`.  
-On first run, it auto-generates the 1,200-row Delhi benchmark CSV.
-
-### 3. Start the Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend dev server starts at `http://localhost:5173`.
-
-### 4. (Optional) Set TinyFish API Key
+### 4. Set TinyFish API Key (required for the TinyFish page)
 ```bash
 export TINYFISH_API_KEY=your_tinyfish_api_key_here
 # Then restart the backend
 uvicorn main:app --reload --port 8000
 ```
 
-Without the key, the TinyFish page uses a realistic deterministic fallback — demos never crash.
+Get a key at https://agent.tinyfish.ai/api-keys. Without it, the TinyFish endpoints return a clear error instead of data. On Render, add it under the backend service → Environment.
 
 ---
 
@@ -287,7 +229,9 @@ Without the key, the TinyFish page uses a realistic deterministic fallback — d
 | `GET` | `/api/state` | Get all active reports, live metrics, baseline nodes, and trust graph snapshot. |
 | `POST` | `/api/simulate/{scenario}` | Run adversarial scenario: `solo_alley_sos`, `campus_wifi_surge`, `vps_jitter_raid`, `slow_drip_sleeper`, `zero_day_drift`, `new_account_sos` |
 | `POST` | `/api/reset` | Clear all reports and reset system state. |
-| `POST` | `/api/tinyfish/verify-osint` | 🐟 TinyFish OSINT corroboration for any Delhi zone — returns verdict + civic ticket. |
+| `POST` | `/api/tinyfish/verify-osint` | 🐟 Live TinyFish OSINT corroboration for any Delhi zone — returns verdict, real sources and Web Agent outcome. |
+| `GET` | `/api/tinyfish/agent-run/{run_id}` | Result of a Web Agent run that was still going. |
+| `GET` | `/api/tinyfish/health` | Live TinyFish connectivity check. |
 | `GET` | `/api/osm/fetch-live` | Fetch live OpenStreetMap civic nodes (police stations, metro gates) in Central Delhi. |
 | `POST` | `/api/benchmark/run` | Run the 1,200-row Delhi benchmark through the pipeline. Returns confusion matrix. |
 | `POST` | `/api/benchmark/upload-csv` | Upload a custom CSV and run the pipeline on it. |
@@ -364,7 +308,7 @@ truePin/
 
 | Capability / Module | Implementation & Verification Status |
 |---|---|
-| **Live-Web OSINT Verification** | `POST /api/tinyfish/verify-osint` — TinyFish Search API + Fetch API + Web Agent with automated fallback |
+| **Live-Web OSINT Verification** | `POST /api/tinyfish/verify-osint` — TinyFish Search API + Fetch API + Web Agent, live calls only (no mock data) |
 | **Adversarial Resilience** | 5-layer defense: CGNAT/ASN/Kinematics, DBSCAN clustering, Bayesian Trust, IsolationForest drift, Proof-of-Presence |
 | **Domain Relevance & Safety Impact** | Anti-defamation protection for local businesses & validated emergency SOS for women/solo travelers |
 | **Real Geospatial Benchmarks** | Evaluated on 1,200 real Delhi hotspot nodes (Connaught Place, Hauz Khas, Kamla Nagar, etc.) |
