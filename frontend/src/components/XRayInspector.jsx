@@ -1,5 +1,7 @@
 // XRayInspector.jsx — 5-Layer breakdown panel for a selected report
-import React from 'react'
+import React, { useEffect, useState } from 'react'
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const LAYER_PREFIXES = ['L1', 'L2', 'L3', 'L4', 'L5']
 const LAYER_NAMES = {
@@ -30,6 +32,45 @@ function scoreColor(val) {
 }
 
 export default function XRayInspector({ report, onDismiss }) {
+  const [ai, setAi]           = useState(null)   // ai_reasoner result
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState(null)
+
+  // Clear the explanation when a different report is selected
+  useEffect(() => { setAi(null); setAiError(null) }, [report?.report_id])
+
+  const explainWithGemini = async () => {
+    setAiLoading(true)
+    setAiError(null)
+    try {
+      const res = await fetch(`${API}/api/skills/ai_reasoner/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'explain_verdict',
+          verdict: report.verdict,
+          final_score: report.final_score,
+          layer_log: report.layer_log || [],
+          report_type: report.report_type,
+          asn_type: report.asn_type,
+          kinematic_variance: report.kinematic_variance,
+          account_age_days: report.account_age_days,
+          lat: report.lat,
+          lng: report.lng,
+          zone_name: 'Delhi',
+          osint_verdict: report.tinyfish_osint_status !== 'NOT_CHECKED' ? report.tinyfish_osint_status : '',
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.success === false) throw new Error(data.detail || data.error || `Backend returned ${res.status}`)
+      setAi(data)
+    } catch (e) {
+      setAiError(e.message)
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   if (!report) return null
 
   const layerScores = {
@@ -88,6 +129,46 @@ export default function XRayInspector({ report, onDismiss }) {
           </div>
         )
       })}
+
+      {/* AI explanation (ai_reasoner skill — Gemini when configured) */}
+      <div className="mt-3 pt-3 border-t border-slate-700">
+        {!ai && (
+          <button
+            onClick={explainWithGemini}
+            disabled={aiLoading}
+            className="w-full text-[11px] font-semibold py-1.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 disabled:opacity-50 text-indigo-100 transition"
+          >
+            {aiLoading ? 'Asking Gemini…' : '✨ Explain this verdict with Gemini'}
+          </button>
+        )}
+        {aiError && <div className="text-[10px] text-red-400 mt-1">❌ {aiError}</div>}
+        {ai && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                ai.ai_powered
+                  ? 'bg-indigo-950 text-indigo-300 border-indigo-700'
+                  : 'bg-slate-800 text-slate-400 border-slate-600'
+              }`}>
+                {ai.ai_powered ? `✨ Gemini · ${ai.model}` : '⚙️ Rule-based (Gemini not used)'}
+              </span>
+              {ai.confidence && <span className="text-[9px] text-slate-400">Confidence: {ai.confidence}</span>}
+            </div>
+            <div className="text-[10px] text-slate-200 leading-relaxed">{ai.explanation}</div>
+            {Array.isArray(ai.key_signals) && ai.key_signals.length > 0 && (
+              <ul className="text-[10px] text-slate-400 list-disc pl-4">
+                {ai.key_signals.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            )}
+            {ai.false_positive_risk && (
+              <div className="text-[10px] text-slate-500">False-positive risk: {ai.false_positive_risk}</div>
+            )}
+            {!ai.ai_powered && ai.fallback_reason && (
+              <div className="text-[9px] text-slate-500 italic">{ai.fallback_reason}</div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -4,35 +4,82 @@ truePin MCP Server
 A real Model Context Protocol (MCP) server that exposes all four truePin
 skills as MCP tools.  Built with FastMCP (official Python MCP SDK).
 
-Transport: Streamable HTTP — mounted at /mcp inside the FastAPI app.
+Transport: Streamable HTTP (stateless, JSON responses) served at /mcp by the FastAPI app.
 
-Judges / MCP clients can connect to:
+Any MCP client (Claude, Cursor, MCP Inspector, other agents) can connect to:
     https://truepin.onrender.com/mcp
+
+Requirements for this to work when hosted inside FastAPI (see main.py):
+  * the FastAPI lifespan must run `mcp_lifespan()` (starts the session manager)
+  * the app is mounted at "/" AFTER all other routes, so the endpoint is exactly /mcp
+  * the public hostname must be in the transport-security allowlist (else HTTP 421)
 
 Tools exposed:
   - verify_safety_report   → 5-layer trust pipeline
   - run_osint_corroboration → TinyFish Search + Fetch + Web Agent (live)
   - detect_anomalies       → DBSCAN + IsolationForest batch analysis
-  - file_civic_ticket      → MCD / Delhi Police patrol dispatch
+  - file_civic_ticket      → MCD civic complaint path via TinyFish Web Agent (read-only)
   - list_skills            → Discovery — returns all registered skills
   - get_system_metrics     → Live trust-engine KPI snapshot
+  - analyze_and_explain    → Gemini explanation of a verdict
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
-# FastMCP import — falls back to a minimal shim if not installed so the
-# FastAPI app still starts even when `mcp` is missing from the environment.
+# MCP SDK import. v2 calls the server class MCPServer; v1 called it FastMCP.
+# If the package is missing, a small shim below explains that at /mcp.
 # ---------------------------------------------------------------------------
 try:
-    from mcp.server.mcpserver import MCPServer as FastMCP
+    from mcp.server import MCPServer as FastMCP  # mcp v2
+    _MCP_V2 = True
     _MCP_AVAILABLE = True
 except ImportError:
-    _MCP_AVAILABLE = False
-    FastMCP = None  # type: ignore
+    try:
+        from mcp.server.fastmcp import FastMCP  # mcp v1
+        _MCP_V2 = False
+        _MCP_AVAILABLE = True
+    except ImportError:
+        _MCP_AVAILABLE = False
+        FastMCP = None  # type: ignore
+
+try:
+    from mcp.server.transport_security import TransportSecuritySettings
+except ImportError:  # very old SDKs had no transport security
+    TransportSecuritySettings = None  # type: ignore
+
+
+def _allowed_hosts() -> List[str]:
+    """Hostnames MCP will answer for. Render sets RENDER_EXTERNAL_HOSTNAME automatically."""
+    hosts = {"truepin.onrender.com", "localhost", "127.0.0.1"}
+    if os.environ.get("RENDER_EXTERNAL_HOSTNAME"):
+        hosts.add(os.environ["RENDER_EXTERNAL_HOSTNAME"])
+    hosts.update(h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip())
+    return sorted(hosts | {f"{h}:*" for h in hosts})
+
+
+def _allowed_origins() -> List[str]:
+    """Browser origins allowed to call /mcp (server-side MCP clients send no Origin)."""
+    origins = {"https://truepin-frontend.onrender.com", "http://localhost:5173", "http://localhost:8000"}
+    origins.update(o.strip() for o in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(",") if o.strip())
+    return sorted(origins)
+
+
+_TRANSPORT_OPTS: Dict[str, Any] = {
+    "streamable_http_path": "/mcp",
+    "stateless_http": True,   # no session stickiness needed — fine on Render restarts
+    "json_response": True,    # plain JSON replies; simplest for any client
+}
+if TransportSecuritySettings is not None:
+    _TRANSPORT_OPTS["transport_security"] = TransportSecuritySettings(
+        allowed_hosts=_allowed_hosts(),
+        allowed_origins=_allowed_origins(),
+    )
 
 from skills.registry import skill_registry
 
@@ -41,13 +88,15 @@ from skills.registry import skill_registry
 # Create the FastMCP server instance
 # ---------------------------------------------------------------------------
 if _MCP_AVAILABLE:
+    _server_kwargs: Dict[str, Any] = {} if _MCP_V2 else dict(_TRANSPORT_OPTS)  # v1 takes them here
     mcp = FastMCP(
+        **_server_kwargs,
         name="truePin Trust Engine",
         instructions=(
             "truePin is a 5-layer adversarial trust engine for women's safety maps in Delhi. "
             "Use these tools to: verify safety pin-drops, run live-web OSINT corroboration, "
-            "detect coordinated fake-report clusters, auto-file civic patrol tickets, and "
-            "inspect the real-time trust-engine metrics dashboard."
+            "detect coordinated fake-report clusters, prepare civic complaints, get a Gemini "
+            "explanation of a verdict, and inspect the real-time trust-engine metrics."
         ),
     )
 
@@ -61,26 +110,35 @@ if _MCP_AVAILABLE:
         user_id: str = "u_anon",
         asn_type: str = "MOBILE_ISP",
         report_type: str = "INCIDENT",
-        kinematic_variance: float = 0.4,
+        kinematic_variance: float = 1.0,
         account_age_days: int = 30,
-        reports_last_min: int = 1,
+        has_gps_breadcrumbs: bool = True,
+        approach_speed_kmh: float = 4.0,
+        ip_address: str = "127.0.0.1",
+        save_to_map: bool = True,
     ) -> Dict[str, Any]:
         """
-        Run the full 5-layer adversarial trust pipeline on a single safety report.
+        Run a safety report through truePin's real 5-layer trust pipeline — the same code
+        the website uses (POST /api/report).
 
-        Layer 1 — Network & Kinematic Fingerprinting (ISP type, GPS motion, account age)
-        Layer 2 — DBSCAN Spatial Cluster Anomaly (coordinated fake-report flood detection)
-        Layer 3 — Temporal Divergence (inhuman report velocity check)
-        Layer 4 — IsolationForest Anomaly Scoring (statistical outlier in lat/lng space)
-        Layer 5 — Proximity Boost (reward reports near police stations / metro entrances)
+        Layer 1 — CGNAT, ASN & kinematics filter (ISP type, device entropy, GPS motion)
+        Layer 2 — DBSCAN spatio-temporal clustering over recent reports (Sybil raid detection)
+        Layer 3 — Bayesian user-trust graph + target-trust divergence
+        Layer 4 — IsolationForest behavioural drift detection
+        Layer 5 — Solo proof-of-presence boost / multi-party corroboration
 
-        Returns: per-layer scores, final trust score 0–100, verdict VERIFIED|SOFT_ALERT|QUARANTINED.
+        asn_type: MOBILE_ISP | CAMPUS_WIFI | RESIDENTIAL_BROADBAND | DATACENTER_VPS.
+        save_to_map=True adds the report to the live map, like a normal submission.
+        Returns: per-layer scores, layer log, final trust score 0–100, verdict
+        VERIFIED (≥75) | SOFT_ALERT (≥35) | QUARANTINED.
         """
         return await skill_registry.execute(
             "trust_scorer",
             lat=lat, lng=lng, user_id=user_id, asn_type=asn_type,
             report_type=report_type, kinematic_variance=kinematic_variance,
-            account_age_days=account_age_days, reports_last_min=reports_last_min,
+            account_age_days=account_age_days, has_gps_breadcrumbs=has_gps_breadcrumbs,
+            approach_speed_kmh=approach_speed_kmh, ip_address=ip_address,
+            save_to_map=save_to_map,
         )
 
     # -----------------------------------------------------------------------
@@ -186,33 +244,17 @@ if _MCP_AVAILABLE:
         fake_detection_rate, genuine_suppression_rate, map_reliability,
         total reports processed, verdict distribution, and uptime.
         """
-        # Import the live state from main app (lazy import to avoid circular deps)
+        # Same numbers as the dashboard (GET /api/state). Lazy import avoids a circular import.
         try:
-            from main import REPORTS, USER_TRUST  # type: ignore
-
-            total     = len(REPORTS)
-            verified  = sum(1 for r in REPORTS if r.final_score >= 55)
-            soft      = sum(1 for r in REPORTS if 35 <= r.final_score < 55)
-            quaran    = sum(1 for r in REPORTS if r.final_score < 35)
-            fdr = round((quaran / total * 100), 1) if total > 0 else 0.0
-            gsr = round((soft / total * 100), 1) if total > 0 else 0.0
-
+            import main  # type: ignore
             return {
-                "total_reports":        total,
-                "verified":             verified,
-                "soft_alert":           soft,
-                "quarantined":          quaran,
-                "fake_detection_rate":  fdr,
-                "genuine_suppression_rate": gsr,
-                "map_reliability_before": 100.0,
-                "map_reliability_after":  round(100 - gsr, 1),
-                "active_users":         len(USER_TRUST),
-                "timestamp":            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                **main.compute_metrics(),
+                "active_users": len(main.USER_TRUST),
+                "timestamp":    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
         except Exception as exc:
             return {
-                "error":    str(exc),
-                "message":  "Metrics unavailable — run a simulator scenario first",
+                "error":     str(exc),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
 
@@ -221,15 +263,15 @@ if _MCP_AVAILABLE:
         verdict: str,
         final_score: float,
         zone_name: str = "Delhi",
-        layer_log: list = [],
+        layer_log: Optional[List[str]] = None,
         osint_verdict: str = "",
-        report_type: str = "INCIDENT"
-    ) -> dict:
+        report_type: str = "INCIDENT",
+    ) -> Dict[str, Any]:
         """
-        Use Gemini Flash LLM to explain WHY a safety report received its verdict
-        and recommend the appropriate civic authority action.
-        Returns structured JSON with ai_explanation, ai_confidence, ai_recommendation.
-        Falls back gracefully to rule-based analysis when GEMINI_API_KEY is not set.
+        Use Google Gemini to explain WHY a safety report received its verdict.
+        Returns explanation, key_signals, confidence and false_positive_risk.
+        Check `ai_powered`: true = Gemini answered (see `model`); false = Gemini was not
+        available and a rule-based explanation was returned (see `fallback_reason`).
         """
         return await skill_registry.execute(
             "ai_reasoner",
@@ -237,14 +279,23 @@ if _MCP_AVAILABLE:
             verdict=verdict,
             final_score=final_score,
             zone_name=zone_name,
-            layer_log=layer_log,
+            layer_log=layer_log or [],
             osint_verdict=osint_verdict,
             report_type=report_type,
         )
 
+    # Build the ASGI app once, at import time (session_manager exists only after this)
+    _MCP_APP = mcp.streamable_http_app(**_TRANSPORT_OPTS) if _MCP_V2 else mcp.streamable_http_app()
+
     def get_mcp_asgi_app():
-        """Return the ASGI app for mounting into FastAPI at /mcp."""
-        return mcp.streamable_http_app()
+        """ASGI app serving the MCP endpoint at /mcp. Mount it at "/" after all other routes."""
+        return _MCP_APP
+
+    @contextlib.asynccontextmanager
+    async def mcp_lifespan():
+        """Run inside the FastAPI lifespan — a mounted app's own lifespan never runs."""
+        async with mcp.session_manager.run():
+            yield
 
 else:
     # -----------------------------------------------------------------------
@@ -268,4 +319,8 @@ else:
         )
 
     def get_mcp_asgi_app():
-        return Starlette(routes=[Route("/{path:path}", _mcp_unavailable)])
+        return Starlette(routes=[Route("/mcp", _mcp_unavailable, methods=["GET", "POST", "DELETE"])])
+
+    @contextlib.asynccontextmanager
+    async def mcp_lifespan():
+        yield

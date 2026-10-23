@@ -68,7 +68,7 @@ export default function BenchmarkPage() {
           <div className="text-slate-300 text-xs leading-relaxed">
             Queries the <strong>free OpenStreetMap Overpass API</strong> for real police stations and metro entrances
             in Central Delhi (bounding box 28.61–28.66°N, 77.19–77.24°E). Returns live civic infrastructure nodes.
-            If the API is rate-limited or unavailable, it automatically falls back to 3 hardcoded baseline nodes.
+            If the API is rate-limited or unavailable, it returns 6 curated nodes instead, clearly labelled "curated".
           </div>
         </div>
         <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4">

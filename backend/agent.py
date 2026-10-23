@@ -56,7 +56,7 @@ _TASK_ROUTING: List[Dict[str, Any]] = [
     {
         "keywords": ["ticket", "civic", "file", "patrol", "dispatch", "mcd", "police"],
         "skill":    "civic_reporter",
-        "reason":   "Task requires filing an automated civic patrol dispatch ticket",
+        "reason":   "Task requires preparing a civic complaint via the TinyFish Web Agent",
     },
     {
         "keywords": ["explain", "reason", "analyse", "analyze", "why", "understand", "narrative"],
@@ -157,6 +157,8 @@ async def _llm_choose_skill(
         accumulated_context={k: str(v)[:100] for k, v in accumulated.items()},
     )
 
+    if result.get("ai_powered"):
+        accumulated["_gemini_used"] = True
     chosen = result.get("chosen_skill", "DONE")
     if chosen == "DONE" or not result.get("should_continue", True):
         return None
@@ -257,6 +259,8 @@ async def run_agent(
 
         # OBS — merge relevant outputs back into accumulated context
         _merge_context(accumulated, skill_name, result)
+        if skill_name == "ai_reasoner" and result.get("ai_powered"):
+            accumulated["_gemini_used"] = True
 
         steps.append({
             "step":        step_idx + 1,
@@ -266,7 +270,7 @@ async def run_agent(
             "observation": result,
         })
 
-        # Early termination if civic ticket is filed (end of chain)
+        # Civic dispatch is the last step of a chain
         if skill_name == "civic_reporter" and not plan_skills:
             break
 
@@ -282,6 +286,8 @@ async def run_agent(
             accumulated["ai_explanation"]   = ai_result.get("explanation", "")
             accumulated["ai_confidence"]    = ai_result.get("confidence", "")
             accumulated["ai_false_pos_risk"]= ai_result.get("false_positive_risk", "")
+            if ai_result.get("ai_powered"):
+                accumulated["_gemini_used"] = True
             used_skills.add("ai_reasoner")
         except Exception:
             pass  # silently skip if ai_reasoner not registered
@@ -291,14 +297,16 @@ async def run_agent(
     return {
         "task":                task,
         "routing_mode":        routing_mode,
-        "llm_powered":         bool(_GEMINI_KEY),
+        # True only if Gemini actually answered at least once in this run
+        "llm_powered":         bool(accumulated.get("_gemini_used")),
+        "gemini_configured":   bool(_GEMINI_KEY),
         "plan_used":           "predefined" if plan else "dynamic",
         "steps":               steps,
         "total_skills_called": len(used_skills),
         "skills_called":       list(used_skills),
         "final_answer":        final_answer,
         "ai_explanation":      accumulated.get("ai_explanation", ""),
-        "accumulated_context": accumulated,
+        "accumulated_context": {k: v for k, v in accumulated.items() if not k.startswith("_")},
         "duration_ms":         round((time.perf_counter() - t_start) * 1000, 2),
     }
 
@@ -310,7 +318,8 @@ def _build_kwargs(skill_name: str, acc: Dict[str, Any], ctx: Dict[str, Any]) -> 
     if skill_name == "trust_scorer":
         return {k: acc.get(k, base.get(k)) for k in [
             "lat", "lng", "user_id", "asn_type", "report_type",
-            "kinematic_variance", "account_age_days", "reports_last_min",
+            "kinematic_variance", "account_age_days", "has_gps_breadcrumbs",
+            "approach_speed_kmh", "ip_address", "save_to_map",
         ] if acc.get(k) is not None or base.get(k) is not None}
 
     if skill_name == "osint_agent":

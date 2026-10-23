@@ -53,13 +53,20 @@ const CURL_SNIPPET = `curl -X POST ${API_BASE}/api/report \\
 const ENDPOINTS = [
   { method: 'POST', path: '/api/report', desc: 'Submit a report through the 5-layer pipeline. Returns full verdict + layer scores.' },
   { method: 'GET',  path: '/api/state', desc: 'Get all active reports, live metrics, baseline nodes, and trust graph snapshot.' },
-  { method: 'POST', path: '/api/simulate/{scenario}', desc: 'Run an adversarial scenario. Options: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift' },
+  { method: 'POST', path: '/api/simulate/{scenario}', desc: 'Run an adversarial scenario. Options: solo_alley_sos, campus_wifi_surge, vps_jitter_raid, slow_drip_sleeper, zero_day_drift, new_account_sos' },
   { method: 'POST', path: '/api/reset', desc: 'Clear all reports and reset system state.' },
   { method: 'GET',  path: '/api/osm/fetch-live', desc: 'Fetch live OpenStreetMap civic nodes (police stations, metro gates) in Central Delhi.' },
   { method: 'POST', path: '/api/benchmark/run', desc: 'Run the 1,200-row Delhi benchmark dataset through the pipeline. Returns confusion matrix and metrics.' },
   { method: 'POST', path: '/api/benchmark/upload-csv', desc: 'Upload a custom CSV (needs lat, lng columns) and run the pipeline on it.' },
   { method: 'GET',  path: '/api/benchmark/download-csv', desc: 'Download the 1,200-row benchmark CSV.' },
   { method: 'GET',  path: '/api/health', desc: 'Health check — returns server status and number of reports in memory.' },
+  { method: 'POST', path: '/api/tinyfish/verify-osint', desc: 'Live TinyFish Search + Fetch (+ Web Agent) corroboration of a report location.' },
+  { method: 'GET',  path: '/api/tinyfish/health', desc: 'Checks the backend can reach TinyFish with a valid key.' },
+  { method: 'GET',  path: '/api/ai/health', desc: 'Makes one tiny Gemini call — ok: true means Gemini is really answering.' },
+  { method: 'GET',  path: '/api/skills', desc: 'List the agent skills (trust_scorer, osint_agent, anomaly_detector, civic_reporter, ai_reasoner).' },
+  { method: 'POST', path: '/api/skills/{name}/run', desc: 'Run one skill directly with a JSON body of its inputs.' },
+  { method: 'POST', path: '/api/agent/run', desc: 'Run the ReAct agent on a task, e.g. {"task": "full verify", "context": {"lat": 28.63, "lng": 77.21}}.' },
+  { method: 'POST', path: '/mcp', desc: 'MCP server (Streamable HTTP). Connect any MCP client (Claude, Cursor, MCP Inspector) to use the trust engine as tools.' },
 ]
 
 const METHOD_COLORS = {
@@ -208,7 +215,7 @@ export default function ApiPage() {
             <tbody className="divide-y divide-slate-800">
               {[
                 { f: 'lat / lng', t: 'float', v: 'Any GPS coordinate', p: 'Location of the report' },
-                { f: 'asn_type', t: 'string', v: 'MOBILE_ISP · CAMPUS_WIFI · DATACENTER_VPS', p: 'Internet source type — L1 filter' },
+                { f: 'asn_type', t: 'string', v: 'MOBILE_ISP · CAMPUS_WIFI · RESIDENTIAL_BROADBAND · DATACENTER_VPS', p: 'Internet source type — L1 filter' },
                 { f: 'kinematic_variance', t: 'float', v: '0.0 – 4.5 (human) · 0.0 = bot', p: 'Phone motion sensor variance — L1 kinematics' },
                 { f: 'has_gps_breadcrumbs', t: 'bool', v: 'true / false', p: 'Whether phone logged a GPS trail before submission' },
                 { f: 'approach_speed_kmh', t: 'float', v: '0 – 60 km/h (human) · >60 = anomaly', p: 'Speed of approach — L4 IsolationForest' },

@@ -22,7 +22,7 @@ Women's safety apps like Safetipin, Google Maps SOS, and Delhi Police's Himmat P
 | **Sleeper Bot Burn** | 30-day-old fake accounts flood a protest zone with false hazard pins | Police/PCR diverted to wrong location |
 | **VPS Jitter Raid** | Bots with DataCenter VPS IPs and zero kinematics spam an area | App crashes under load; real SOS pins buried |
 
-**truePin** detects all of these attacks in real-time using a **5-Layer Adversarial Trust Pipeline** — and now enhances pin verification with **TinyFish Live-Web OSINT** for ground-truth corroboration from live civic/news/police sources.
+**truePin** detects all of these attacks in real-time using a **5-Layer Adversarial Trust Pipeline**, corroborates reports with **TinyFish Live-Web OSINT**, explains verdicts with **Google Gemini**, and exposes the whole trust engine to other AI agents as an **MCP server**.
 
 ---
 
@@ -34,6 +34,9 @@ Women's safety apps like Safetipin, Google Maps SOS, and Delhi Police's Himmat P
 | **Backend API (Render)** | [https://truepin.onrender.com](https://truepin.onrender.com) | ✅ Live |
 | **Health Check** | [https://truepin.onrender.com/api/health](https://truepin.onrender.com/api/health) | ✅ Live |
 | **API Docs (FastAPI)** | [https://truepin.onrender.com/docs](https://truepin.onrender.com/docs) | ✅ Live |
+| **MCP Server** | `https://truepin.onrender.com/mcp` | For MCP clients (see below) |
+| **Gemini check** | [https://truepin.onrender.com/api/ai/health](https://truepin.onrender.com/api/ai/health) | `ok: true` = Gemini live |
+| **TinyFish check** | [https://truepin.onrender.com/api/tinyfish/health](https://truepin.onrender.com/api/tinyfish/health) | `ok: true` = TinyFish live |
 
 ---
 
@@ -115,8 +118,8 @@ Safety Pin Submitted
     │           TinyFish 3-Step OSINT Pipeline         │
     │                                                  │
     │  Step 1: TinyFish Search API                     │
-    │   → Query: "Delhi {zone} safety hazard           │
-    │             civic streetlight 2026"              │
+    │   → Query: "{zone} Delhi {report type}           │
+    │             safety news"                         │
     │   → Live news / civic alerts for the zone (IN)   │
     │   → Returns: top real web results with URLs      │
     │                                                  │
@@ -135,12 +138,14 @@ Safety Pin Submitted
     ┌──────────────────────────────────┐
     │ CORROBORATED_HAZARD              │
     │  → Trust Score: +18             │
-    │  → Soft Alert → VERIFIED        │
     │  → Web Agent: DISPATCH_READY    │
+    ├──────────────────────────────────┤
+    │ UNVERIFIED                       │
+    │  → Trust Score: 0               │
+    │  → No live web evidence yet     │
     ├──────────────────────────────────┤
     │ DEFAMATION_MISMATCH              │
     │  → Trust Score: -30             │
-    │  → Report QUARANTINED           │
     │  → Web Agent: DISPATCH_BLOCKED  │
     └──────────────────────────────────┘
 ```
@@ -210,14 +215,53 @@ Content-Type: application/json
 - If `TINYFISH_API_KEY` is missing or TinyFish fails, `verify-osint` returns an error (503/502/429) with the real reason.
 - `GET /api/tinyfish/health` confirms the backend can reach TinyFish.
 
-### 4. Set TinyFish API Key (required for the TinyFish page)
+---
+
+## 🤖 AI Agent Layer — Skills, ReAct Agent, Gemini & MCP Server
+
+### Agent skills (`backend/skills/`)
+truePin's capabilities are packaged as **5 agent skills** — Python tools with typed input schemas, registered in a skills registry. The ReAct agent and the MCP server both call them, so every surface runs the same code.
+
+| Skill | What it does | Uses |
+|---|---|---|
+| `trust_scorer` | Runs a report through the real 5-layer pipeline (same code as `POST /api/report`) | scikit-learn |
+| `osint_agent` | Live-web corroboration | TinyFish Search + Fetch + Web Agent |
+| `anomaly_detector` | DBSCAN + IsolationForest on a batch of reports | scikit-learn |
+| `civic_reporter` | Reads the live MCD portal and prepares the complaint path (read-only) | TinyFish Web Agent |
+| `ai_reasoner` | Explains verdicts, recommends civic action, routes the agent | **Google Gemini** |
+
+List them: `GET /api/skills` · run one: `POST /api/skills/{name}/run`.
+
+> These are *tool-style* skills inside the backend (Python classes with a name, description and JSON input schema). They are not Anthropic "Agent Skills" (`SKILL.md` folders).
+
+### ReAct agent (`backend/agent.py`)
+`POST /api/agent/run` with `{"task": "full verify", "context": {"lat": 28.63, "lng": 77.21, "zone_name": "Connaught Place"}}` runs a THINK → ACT → OBSERVE loop over the skills (e.g. `trust_scorer → osint_agent → ai_reasoner → civic_reporter`) and returns every step. With a Gemini key, Gemini chooses the next skill when no predefined plan matches; otherwise keyword routing is used. The response field `llm_powered` is `true` only if Gemini actually answered during that run.
+
+### Google Gemini (`ai_reasoner` skill)
+- Model: `gemini-flash-latest` (Google's alias for the current Flash model; override with `GEMINI_MODEL`) via the `google-genai` SDK.
+- **How to tell Gemini is really working:**
+  1. Open `/api/ai/health` — `"ok": true` plus a reply means Gemini answered just now.
+  2. On the website, select a report → **✨ Explain this verdict with Gemini**. The badge shows `Gemini · <model>` when Gemini answered, or `Rule-based (Gemini not used)` with the reason.
+  3. Any `ai_reasoner` result has `"ai_powered": true` and `"model"` when it came from Gemini.
+- Without a key (or if the call fails) it returns a rule-based answer labelled `"ai_powered": false` with a `fallback_reason` — never presented as Gemini.
+
+### MCP server (`backend/mcp_server.py`)
+truePin is an **MCP server**: any MCP-compatible AI agent (Claude, Cursor, VS Code, MCP Inspector, your own agent) can connect and use the trust engine as tools.
+
+- **Endpoint:** `https://truepin.onrender.com/mcp` (Streamable HTTP, stateless, JSON responses; built with the official `mcp` Python SDK)
+- **Tools:** `verify_safety_report`, `run_osint_corroboration`, `detect_anomalies`, `file_civic_ticket`, `list_skills`, `get_system_metrics`, `analyze_and_explain`
+- **Connect from Claude Code:** `claude mcp add --transport http truepin https://truepin.onrender.com/mcp`
+- **Try it in a browser:** `npx @modelcontextprotocol/inspector` → transport *Streamable HTTP* → URL above.
+- No auth: the endpoint is public, like the REST API. `verify_safety_report` adds the report to the live map unless `save_to_map` is `false`.
+
+### Setup — API keys
 ```bash
-export TINYFISH_API_KEY=your_tinyfish_api_key_here
-# Then restart the backend
+# backend/.env (local) — or Render → backend service → Environment
+TINYFISH_API_KEY=...   # https://agent.tinyfish.ai/api-keys  (required for TinyFish features)
+GEMINI_API_KEY=...     # https://aistudio.google.com/app/apikey (optional; enables Gemini)
 uvicorn main:app --reload --port 8000
 ```
-
-Get a key at https://agent.tinyfish.ai/api-keys. Without it, the TinyFish endpoints return a clear error instead of data. On Render, add it under the backend service → Environment.
+Without `TINYFISH_API_KEY`, the TinyFish endpoints return a clear error instead of data.
 
 ---
 
@@ -237,6 +281,12 @@ Get a key at https://agent.tinyfish.ai/api-keys. Without it, the TinyFish endpoi
 | `POST` | `/api/benchmark/upload-csv` | Upload a custom CSV and run the pipeline on it. |
 | `GET` | `/api/benchmark/download-csv` | Download the 1,200-row benchmark CSV. |
 | `GET` | `/api/health` | Health check — returns server status and reports in memory. |
+| `GET` | `/api/ai/health` | Live Gemini check (one tiny call). |
+| `GET` | `/api/skills` | List the 5 agent skills with input schemas. |
+| `POST` | `/api/skills/{name}/run` | Run one skill directly. |
+| `POST` | `/api/agent/run` | Run the ReAct agent on a task. |
+| `GET` | `/api/agent/plans` | Predefined plans and routing rules. |
+| `POST` | `/mcp` | MCP server endpoint (Streamable HTTP). |
 
 ---
 
@@ -245,25 +295,33 @@ Get a key at https://agent.tinyfish.ai/api-keys. Without it, the TinyFish endpoi
 | Category | Technologies |
 |---|---|
 | **Frontend** | React 18, Vite 5, Tailwind CSS, Lucide Icons |
-| **Maps / GIS** | Leaflet.js, React-Leaflet, CartoDB Dark Matter tiles, OpenStreetMap |
+| **Maps / GIS** | Leaflet.js, React-Leaflet, Google Maps tiles, OpenStreetMap Overpass API |
 | **Backend** | Python 3.11, FastAPI, Uvicorn, Pydantic v2, HTTPX |
-| **AI / ML** | Scikit-Learn (DBSCAN, Isolation Forest), NumPy |
+| **AI / ML** | Scikit-Learn (DBSCAN, Isolation Forest), NumPy, Google Gemini (`google-genai`) |
+| **Agents / MCP** | Skills registry, ReAct agent, MCP server (official `mcp` Python SDK) |
 | **Live Web OSINT** | TinyFish Search API, TinyFish Fetch API, TinyFish Web Agent |
-| **External Data** | OpenStreetMap Overpass API, Safetipin civic scores |
 | **Deployment** | Render (API backend + SPA frontend), GitHub (version control) |
 
 ---
 
 ## 📊 Dataset & Benchmark
 
-The 1,200-row benchmark dataset (`backend/delhi_kaggle_osm_benchmark_1200.csv`) is **synthetically generated on startup** using:
+The 1,200-row benchmark dataset (`backend/delhi_synthetic_benchmark_1200.csv`) is **synthetic** — generated by our code (fixed random seed, so it is reproducible) using:
 
-- **8 real Delhi hotspots** (Connaught Place, Hauz Khas, Kamla Nagar, Laxmi Nagar, Rohini, Dwarka, Saket, Karol Bagh) — coordinates from OpenStreetMap
+- **8 real Delhi hotspots** (Connaught Place, Hauz Khas, Kamla Nagar, Laxmi Nagar, Rohini, Dwarka, Saket, Karol Bagh), chosen uniformly at random per row
 - **Real Indian ASNs**: Jio (AS55836), Airtel (AS45609), DigitalOcean (AS14061), AWS (AS16509), Cloudflare Warp (AS13335)
-- **800 genuine reports**: Mobile ISP users with valid kinematics and GPS breadcrumbs
-- **400 fake reports**: Including 18 hard adversarial SIM-farm shaker attacks (Jio + kv=1.1)
+- **800 genuine reports**: 793 mobile-ISP users with valid kinematics + 7 hard cases (real users on VPN, no GPS indoors)
+- **400 fake reports**: 382 datacenter bots + 18 hard SIM-farm shaker attacks (Jio + kv = 1.1)
 
-Dataset distribution matches crime hotspot frequency from the **Kaggle Delhi Crime Hotspot** dataset by geographic zone weighting.
+**Current results** (`POST /api/benchmark/run`, all computed live from the pipeline):
+
+| Metric | Value |
+|---|---|
+| Fakes caught (recall) | 95.5% (382 / 400) |
+| Precision | 93.9% |
+| Genuine reports wrongly quarantined | 3.1% (25 / 800) |
+| F1 | 94.7% |
+| Map accuracy (share of pins that are genuine) | 66.8% before → 97.7% after |
 
 ---
 
@@ -272,10 +330,15 @@ Dataset distribution matches crime hotspot frequency from the **Kaggle Delhi Cri
 ```
 truePin/
 ├── backend/
-│   ├── main.py                          # FastAPI app — 5-layer pipeline + TinyFish OSINT endpoint
+│   ├── main.py                          # FastAPI app — 5-layer pipeline + all REST endpoints
+│   ├── tinyfish.py                      # TinyFish client (Search, Fetch, Web Agent) — real calls only
+│   ├── agent.py                         # ReAct agent runtime
+│   ├── mcp_server.py                    # MCP server (7 tools) served at /mcp
+│   ├── skills/                          # 5 agent skills + registry (ai_reasoner = Gemini)
 │   ├── requirements.txt                 # Python dependencies
-│   ├── Procfile                         # Render deployment config
-│   └── delhi_kaggle_osm_benchmark_1200.csv  # Auto-generated benchmark (1,200 rows)
+│   ├── .env.example                     # Environment variables
+│   ├── Procfile                         # Render start command
+│   └── delhi_synthetic_benchmark_1200.csv   # Synthetic benchmark (1,200 rows)
 │
 ├── frontend/
 │   └── src/
@@ -283,12 +346,8 @@ truePin/
 │       ├── components/
 │       │   ├── KpiBar.jsx               # Live telemetry bar
 │       │   ├── DualMaps.jsx             # Before/After Leaflet maps
-│       │   ├── XRayInspector.jsx        # Pin forensics inspector
-│       │   ├── SimulatorPanel.jsx       # Attack scenario runner
-│       │   ├── Firehose.jsx             # Live report stream
-│       │   ├── CustomReportModal.jsx    # Manual report submission
-│       │   ├── BenchmarkModal.jsx       # Benchmark results modal
-│       │   └── UseCasesModal.jsx        # Use cases modal
+│       │   ├── XRayInspector.jsx        # Pin forensics inspector + "Explain with Gemini"
+│       │   └── CustomReportModal.jsx    # Manual report submission
 │       └── pages/
 │           ├── MapsPage.jsx             # Dual before/after maps
 │           ├── SimulatorPage.jsx        # Attack simulation control panel
@@ -297,7 +356,7 @@ truePin/
 │           ├── ApiPage.jsx              # REST API docs + revenue model
 │           └── TinyFishPage.jsx         # 🐟 TinyFish Live-Web OSINT agent
 │
-├── netlify.toml                         # Netlify SPA redirect config
+├── log.md                               # Technical disclosure log
 ├── .gitignore
 └── README.md                            # This file
 ```
@@ -311,7 +370,9 @@ truePin/
 | **Live-Web OSINT Verification** | `POST /api/tinyfish/verify-osint` — TinyFish Search API + Fetch API + Web Agent, live calls only (no mock data) |
 | **Adversarial Resilience** | 5-layer defense: CGNAT/ASN/Kinematics, DBSCAN clustering, Bayesian Trust, IsolationForest drift, Proof-of-Presence |
 | **Domain Relevance & Safety Impact** | Anti-defamation protection for local businesses & validated emergency SOS for women/solo travelers |
-| **Real Geospatial Benchmarks** | Evaluated on 1,200 real Delhi hotspot nodes (Connaught Place, Hauz Khas, Kamla Nagar, etc.) |
+| **Benchmark** | 1,200 synthetic reports around 8 real Delhi hotspots — results computed live, see above |
+| **AI agent interoperability** | MCP server at `/mcp` (7 tools) + 5 agent skills + ReAct agent |
+| **LLM reasoning** | Google Gemini explains verdicts (`/api/ai/health` proves it is live) |
 | **Live Cloud Deployment** | High-availability Render frontend & asynchronous FastAPI Render backend |
 | **SaaS B2B Revenue Model** | 3-tier enterprise unit economics (Civic Starter, Navigation SDK, Smart City Command) |
 | **UN SDG Alignment** | Primary: SDG 5 (Gender Equality), SDG 8 (Decent Work), SDG 9 (Industry & Innovation), SDG 11 (Sustainable Cities) |
