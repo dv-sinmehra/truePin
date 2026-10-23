@@ -158,40 +158,71 @@ class OsintAgentSkill(Skill):
                     "Authorization": f"Bearer {TINYFISH_API_KEY}",
                     "Content-Type": "application/json",
                 }
-                # Step 1: Search
+                # Step 1: TinyFish Search API — find relevant URLs
                 search_resp = await client.get(
                     "https://api.search.tinyfish.ai",
                     headers=headers,
-                    params={"query": f"Delhi {zone} safety hazard streetlight civic 2026"},
+                    params={
+                        "query": f"Delhi {zone} women safety news civic hazard 2026",
+                        "num_results": 6,
+                    },
                 )
-                search_results = (search_resp.json().get("results", [])
-                                  if search_resp.status_code == 200 else [])
+                search_ok = search_resp.status_code == 200
+                search_data = search_resp.json() if search_ok else {}
+                search_results = search_data.get("results", [])
 
                 SKIP = ("facebook.com", "instagram.com", "youtube.com", "twitter.com", "x.com")
                 clean = [r for r in search_results if not any(d in r.get("url", "") for d in SKIP)]
-                top = (clean or search_results)[:2]
+                top3 = (clean or search_results)[:3]
 
                 sources = []
-                for r in top:
+
+                # Add search result cards (show title + snippet from search engine)
+                for r in top3:
+                    sources.append({
+                        "step": "TinyFish Search API",
+                        "url": r.get("url", ""),
+                        "title": r.get("title") or r.get("site_name") or r.get("url", ""),
+                        "snippet": r.get("snippet") or r.get("description") or "No snippet.",
+                        "relevance": r.get("score", 0.85),
+                        "live_api_called": search_ok,
+                    })
+
+                # Step 2: TinyFish Fetch API — extract full article body from top-2 URLs
+                import re as _re
+                for r in top3[:2]:
                     url = r.get("url", "")
-                    if url:
-                        fetch_resp = await client.post(
-                            "https://api.fetch.tinyfish.ai",
-                            headers=headers,
-                            json={"urls": [url], "formats": ["markdown"], "onlyMainContent": True},
-                        )
-                        content = ""
-                        if fetch_resp.status_code == 200:
-                            data = fetch_resp.json()
-                            content = (data.get("results", [{}])[0]
-                                       .get("markdown", "")[:400])
-                        sources.append({
-                            "step": "TinyFish Fetch API",
-                            "url": url,
-                            "title": r.get("title", url),
-                            "snippet": content or r.get("snippet", ""),
-                            "relevance": r.get("score", 0.75),
-                        })
+                    if not url:
+                        continue
+                    fetch_resp = await client.post(
+                        "https://api.fetch.tinyfish.ai",
+                        headers=headers,
+                        json={"urls": [url], "format": "markdown", "ttl": 0},
+                    )
+                    fetch_ok = fetch_resp.status_code == 200
+                    fetch_raw = fetch_resp.json() if fetch_ok else {}
+                    fetch_items = fetch_raw.get("results", [])
+                    item = fetch_items[0] if fetch_items else fetch_raw
+                    # Try all content field names
+                    article_body = (
+                        item.get("text")
+                        or item.get("content")
+                        or item.get("markdown")
+                        or item.get("description")
+                        or ""
+                    )
+                    # Clean markdown syntax
+                    clean_body = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', article_body)
+                    clean_body = _re.sub(r'#+\s*', '', clean_body)
+                    clean_body = ' '.join(clean_body.split())[:500]
+                    sources.append({
+                        "step": "TinyFish Fetch API",
+                        "url": item.get("final_url") or item.get("url") or url,
+                        "title": item.get("title") or r.get("title") or url,
+                        "snippet": clean_body or f"Could not extract body (HTTP {fetch_resp.status_code})",
+                        "relevance": r.get("score", 0.80),
+                        "live_api_called": fetch_ok,
+                    })
 
                 corroborated = trust_score >= 55.0
                 verdict = "CORROBORATED_HAZARD" if corroborated else "DEFAMATION_MISMATCH"

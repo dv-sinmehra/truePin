@@ -877,7 +877,7 @@ async def osm_fetch_live():
     if TINYFISH_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
-                tf_headers = {"X-API-Key": TINYFISH_API_KEY, "Content-Type": "application/json"}
+                tf_headers = {"Authorization": f"Bearer {TINYFISH_API_KEY}", "Content-Type": "application/json"}
                 # Use TinyFish to fetch a structured OSM/safety-node page for Delhi
                 fetch_resp = await client.post(
                     "https://api.fetch.tinyfish.ai",
@@ -1077,15 +1077,15 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
     }
 
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
 
             # ── Step 1: TinyFish Search API ────────────────────────────────
             search_resp = await client.get(
                 "https://api.search.tinyfish.ai",
                 headers=tf_headers,
                 params={
-                    "query": f"{req.zone_name} Delhi safety news traffic alert",
-                    "purpose": "Verify crowdsourced safety report with live local web news",
+                    "query": f"{req.zone_name} Delhi women safety news civic hazard 2026",
+                    "num_results": 6,
                 },
             )
             search_ok = search_resp.status_code == 200
@@ -1095,27 +1095,45 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
 
             sources: List[Dict[str, Any]] = []
 
-            # Add the Search API result as first source
-            # Filter social/video domains for Search display card
+            # ---- Search results: show top-3 clean results with real titles ----
             SKIP_DOMAINS = ("facebook.com", "instagram.com", "youtube.com", "twitter.com", "x.com", "tiktok.com")
             preferred_search = [
                 r for r in search_results
                 if r.get("url") and not any(d in r.get("url", "") for d in SKIP_DOMAINS)
             ]
-            top = (preferred_search or search_results)[0] if (preferred_search or search_results) else {}
-            sources.append({
-                "step": "TinyFish Search API",
-                "query": f"{req.zone_name} Delhi safety news traffic alert",
-                "url": top.get("url", "https://api.search.tinyfish.ai"),
-                "title": f"TinyFish Search — {search_data.get('total_results', 0)} live results for {req.zone_name}",
-                "extracted_snippet": top.get("snippet", "No live results returned."),
-                "site_name": top.get("site_name", ""),
-                "date": top.get("date", ""),
-                "relevance_score": 0.92,
-                "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                "live_api_called": True,
-                "http_status": search_resp.status_code,
-            })
+            top3 = (preferred_search or search_results)[:3]
+            search_query_used = f"{req.zone_name} Delhi women safety news civic hazard 2026"
+            for sr in top3:
+                sources.append({
+                    "step": "TinyFish Search API",
+                    "query": search_query_used,
+                    # URL = the actual web page found by search
+                    "url": sr.get("url", ""),
+                    # title = real article/page title from search result (NOT our own label)
+                    "title": sr.get("title") or sr.get("site_name") or sr.get("url", "Unknown"),
+                    # extracted_snippet = search snippet (short excerpt from the article)
+                    "extracted_snippet": sr.get("snippet") or sr.get("description") or "No snippet returned.",
+                    "site_name": sr.get("site_name", ""),
+                    "date": sr.get("date") or sr.get("published_date", ""),
+                    "relevance_score": sr.get("score", 0.88),
+                    "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    "live_api_called": search_ok,
+                    "http_status": search_resp.status_code,
+                    "search_rank": sr.get("position", 0),
+                    "total_results_found": search_data.get("total_results", len(search_results)),
+                })
+            if not top3:
+                sources.append({
+                    "step": "TinyFish Search API",
+                    "query": search_query_used,
+                    "url": "https://api.search.tinyfish.ai",
+                    "title": f"Search: no results for {req.zone_name} (HTTP {search_resp.status_code})",
+                    "extracted_snippet": "TinyFish Search returned no results. Check TINYFISH_API_KEY in Render env vars.",
+                    "relevance_score": 0.0,
+                    "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    "live_api_called": search_ok,
+                    "http_status": search_resp.status_code,
+                })
 
             # ── Step 2: TinyFish Fetch API ─────────────────────────────────
             # Skip social/video domains — prefer actual news sites
@@ -1138,27 +1156,40 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
                     },
                 )
                 fetch_ok = fetch_resp.status_code == 200
-                fetch_data = fetch_resp.json() if fetch_ok else {}
-                # Response format: {"results":[{url, final_url, title, description, language, text, author, published_date}]}
-                fetch_items = fetch_data.get("results", [])
-                item = fetch_items[0] if fetch_items else {}
-                # Prefer "text" (full article body) → "description" → fallback
-                content = (item.get("text") or item.get("description") or "")[:500]
+                fetch_raw = fetch_resp.json() if fetch_ok else {}
+                # TinyFish Fetch: try both wrapped {results:[...]} and flat response
+                fetch_items = fetch_raw.get("results", [])
+                item = fetch_items[0] if fetch_items else fetch_raw
+                # Try all content field names in order of preference (full body first)
+                article_body = (
+                    item.get("text")           # TinyFish primary: full article body
+                    or item.get("content")     # alternative name
+                    or item.get("markdown")    # markdown format
+                    or item.get("description") # short description fallback
+                    or ""
+                )
+                # Strip markdown syntax to get clean readable text
+                import re as _re
+                clean_body = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', article_body)
+                clean_body = _re.sub(r'#+\s*', '', clean_body)
+                clean_body = ' '.join(clean_body.split())[:500]
 
                 sources.append({
                     "step": "TinyFish Fetch API",
-                    "query": "Extract structured civic hazard and business status content",
-                    "url": item.get("final_url", target_url),
-                    "title": item.get("title", target_url),
-                    "extracted_snippet": content or f"Content extracted from {target_url}",
+                    "query": f"Full article extraction from {target_url}",
+                    "url": item.get("final_url") or item.get("url") or target_url,
+                    "title": item.get("title") or target_url,
+                    # extracted_snippet = full article body fetched from the live page
+                    "extracted_snippet": clean_body or f"Could not extract content from {target_url} (HTTP {fetch_resp.status_code})",
                     "language": item.get("language", "en"),
                     "author": item.get("author", ""),
-                    "published_date": item.get("published_date", ""),
+                    "published_date": item.get("published_date") or item.get("date", ""),
                     "latency_ms": item.get("latency_ms", 0),
                     "relevance_score": 0.87,
                     "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                    "live_api_called": True,
+                    "live_api_called": fetch_ok,
                     "http_status": fetch_resp.status_code,
+                    "raw_fields": list(item.keys()) if fetch_ok else [],
                 })
 
             # ── Step 3: TinyFish Web Agent ──────────────────────────────────
@@ -1229,7 +1260,7 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
             "step": "System Notice",
             "url": "",
             "title": "Live API call failed — using structured fallback",
-            "extracted_snippet": f"TinyFish API error: {str(exc)[:120]}. Structured civic fallback data shown.",
+            "extracted_snippet": f"TinyFish live call failed ({type(exc).__name__}): {str(exc)[:200]}. Showing structured Delhi civic dataset fallback.",
             "relevance_score": 0.0,
             "fetched_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             "live_api_called": False,
