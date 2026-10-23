@@ -1071,7 +1071,13 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
             sources: List[Dict[str, Any]] = []
 
             # Add the Search API result as first source
-            top = search_results[0] if search_results else {}
+            # Filter social/video domains for Search display card
+            SKIP_DOMAINS = ("facebook.com", "instagram.com", "youtube.com", "twitter.com", "x.com", "tiktok.com")
+            preferred_search = [
+                r for r in search_results
+                if r.get("url") and not any(d in r.get("url", "") for d in SKIP_DOMAINS)
+            ]
+            top = (preferred_search or search_results)[0] if (preferred_search or search_results) else {}
             sources.append({
                 "step": "TinyFish Search API",
                 "query": f"{req.zone_name} Delhi safety news traffic alert",
@@ -1088,7 +1094,6 @@ async def _call_tinyfish_api(req: TinyFishOsintRequest) -> TinyFishOsintResponse
 
             # ── Step 2: TinyFish Fetch API ─────────────────────────────────
             # Skip social/video domains — prefer actual news sites
-            SKIP_DOMAINS = ("facebook.com", "instagram.com", "youtube.com", "twitter.com", "x.com", "tiktok.com")
             preferred = [
                 r for r in search_results
                 if r.get("url") and not any(d in r.get("url", "") for d in SKIP_DOMAINS)

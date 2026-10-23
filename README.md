@@ -3,7 +3,7 @@
 > **Domain: Women Safety & Public Mobility Infrastructure**  
 > **Autonomous Adversarial Pin Sanitization & Live-Web OSINT Corroboration Engine**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-truepin.netlify.app-blue?style=flat-square)](https://truepin.netlify.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-truepin--frontend.onrender.com-blue?style=flat-square)](https://truepin-frontend.onrender.com)
 [![Backend API](https://img.shields.io/badge/Backend%20API-Render-green?style=flat-square)](https://truepin.onrender.com)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=flat-square&logo=python)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
@@ -30,7 +30,7 @@ Women's safety apps like Safetipin, Google Maps SOS, and Delhi Police's Himmat P
 
 | Service | URL | Status |
 |---|---|---|
-| **Frontend (Netlify)** | [https://truepin.netlify.app](https://truepin.netlify.app) | ✅ Live |
+| **Frontend (Render)** | [https://truepin-frontend.onrender.com](https://truepin-frontend.onrender.com) | ✅ Live |
 | **Backend API (Render)** | [https://truepin.onrender.com](https://truepin.onrender.com) | ✅ Live |
 | **Health Check** | [https://truepin.onrender.com/api/health](https://truepin.onrender.com/api/health) | ✅ Live |
 | **API Docs (FastAPI)** | [https://truepin.onrender.com/docs](https://truepin.onrender.com/docs) | ✅ Live |
@@ -306,7 +306,7 @@ Without the key, the TinyFish page uses a realistic deterministic fallback — d
 | **AI / ML** | Scikit-Learn (DBSCAN, Isolation Forest), NumPy |
 | **Live Web OSINT** | TinyFish Search API, TinyFish Fetch API, TinyFish Web Agent |
 | **External Data** | OpenStreetMap Overpass API, Safetipin civic scores |
-| **Deployment** | Render (API backend), Netlify (SPA frontend), GitHub (version control) |
+| **Deployment** | Render (API backend + SPA frontend), GitHub (version control) |
 
 ---
 
@@ -368,7 +368,7 @@ truePin/
 | **Adversarial Resilience** | 5-layer defense: CGNAT/ASN/Kinematics, DBSCAN clustering, Bayesian Trust, IsolationForest drift, Proof-of-Presence |
 | **Domain Relevance & Safety Impact** | Anti-defamation protection for local businesses & validated emergency SOS for women/solo travelers |
 | **Real Geospatial Benchmarks** | Evaluated on 1,200 real Delhi hotspot nodes (Connaught Place, Hauz Khas, Kamla Nagar, etc.) |
-| **Live Cloud Deployment** | High-availability Netlify frontend & asynchronous FastAPI Render backend |
+| **Live Cloud Deployment** | High-availability Render frontend & asynchronous FastAPI Render backend |
 | **SaaS B2B Revenue Model** | 3-tier enterprise unit economics (Civic Starter, Navigation SDK, Smart City Command) |
 | **UN SDG Alignment** | Primary: SDG 5 (Gender Equality), SDG 8 (Decent Work), SDG 9 (Industry & Innovation), SDG 11 (Sustainable Cities) |
 
