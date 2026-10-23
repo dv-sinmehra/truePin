@@ -241,7 +241,7 @@ List them: `GET /api/skills` · run one: `POST /api/skills/{name}/run`.
 - Model: `gemini-flash-latest` (Google's alias for the current Flash model; override with `GEMINI_MODEL`) via the `google-genai` SDK.
 - **How to tell Gemini is really working:**
   1. Open `/api/ai/health` — `"ok": true` plus a reply means Gemini answered just now.
-  2. On the website, select a report → **✨ Explain this verdict with Gemini**. The badge shows `Gemini · <model>` when Gemini answered, or `Rule-based (Gemini not used)` with the reason.
+  2. On the website, open the **🤖 AI Agent** page: it shows live Gemini / TinyFish / MCP status and lets you run the agent. Or select a report on Attack Sim / Firehose → **✨ Explain this verdict with Gemini**. The badge shows `Gemini · <model>` when Gemini answered, or `Rule-based (Gemini not used)` with the reason.
   3. Any `ai_reasoner` result has `"ai_powered": true` and `"model"` when it came from Gemini.
 - Without a key (or if the call fails) it returns a rule-based answer labelled `"ai_powered": false` with a `fallback_reason` — never presented as Gemini.
 
@@ -354,7 +354,8 @@ truePin/
 │           ├── FirehosePage.jsx         # Live firehose + X-Ray inspector
 │           ├── BenchmarkPage.jsx        # 1,200-row benchmark runner
 │           ├── ApiPage.jsx              # REST API docs + revenue model
-│           └── TinyFishPage.jsx         # 🐟 TinyFish Live-Web OSINT agent
+│           ├── TinyFishPage.jsx         # 🐟 TinyFish Live-Web OSINT agent
+│           └── AgentPage.jsx            # 🤖 Gemini, skills, ReAct agent, MCP status + connect
 │
 ├── log.md                               # Technical disclosure log
 ├── .gitignore

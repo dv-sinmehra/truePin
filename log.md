@@ -262,7 +262,7 @@ The `anomaly_detector` skill fits a separate IsolationForest on lat/lng of Delhi
 | **Role** | Explains WHY a verdict was issued; recommends civic action; routes the ReAct agent |
 | **Response format** | Forced JSON (`response_mime_type="application/json"`) |
 | **Fallback** | Rule-based answer, always labelled `ai_powered: false` with `fallback_reason` |
-| **How to verify** | `GET /api/ai/health` (live call), the "Explain with Gemini" button on the website, or `ai_powered: true` + `model` in any result |
+| **How to verify** | The 🤖 AI Agent page, `GET /api/ai/health` (live call), the "Explain with Gemini" button in the X-Ray Inspector, or `ai_powered: true` + `model` in any result |
 | **Key source** | Free from aistudio.google.com/app/apikey |
 
 > No custom LLM was trained or fine-tuned. No model checkpoint (`.pt`, `.pkl`, `.onnx`) is committed to the repository. scikit-learn models are built in-memory at server start.
@@ -297,6 +297,7 @@ The `anomaly_detector` skill fits a separate IsolationForest on lat/lng of Delhi
 | **Benchmark** | 📊 | Run the 1,200-row Delhi dataset; shows precision / recall / F1 / confusion matrix |
 | **TinyFish OSINT** | 🐟 | Select a Delhi zone → run live Search + Fetch + Web Agent → see real sources, verdict and the civic complaint path |
 | **API Docs** | 🔌 | Full REST reference + B2B SaaS revenue model |
+| **AI Agent** | 🤖 | Live Gemini / TinyFish / MCP status (the MCP card makes a real `tools/list` call), run the ReAct agent and see each step, list of skills, MCP connect command |
 
 ### REST API Endpoints (judge-testable)
 
@@ -384,3 +385,4 @@ The `anomaly_detector` skill fits a separate IsolationForest on lat/lng of Delhi
 | 2026-10-23 | Fix: **Gemini** — `gemini-1.5-flash` is shut down, so calls always failed; switched to `gemini-flash-latest` via the `google-genai` SDK; added `GET /api/ai/health`, "Explain with Gemini" button, honest `llm_powered` flag in agent runs | this commit |
 | 2026-10-23 | Fix: benchmark labelled as synthetic (was "Kaggle"), CSV renamed to `delhi_synthetic_benchmark_1200.csv`; removed hidden floors in map-accuracy (≥ 90%) and corrected RMSE formula; docs updated with real results | this commit |
 | 2026-10-23 | Remove: unused frontend components (`BenchmarkModal`, `Firehose`, `SimulatorPanel`, `UseCasesModal`) and old Netlify configs (frontend is on Render) | this commit |
+| 2026-10-23 | Add: **🤖 AI Agent page** — live Gemini / TinyFish / MCP status, run the agent, skills list, MCP connect command; agent skips the civic Web Agent for non-VERIFIED reports or when it already ran | this commit |

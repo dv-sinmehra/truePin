@@ -245,6 +245,24 @@ async def run_agent(
             continue
         used_skills.add(skill_name)
 
+        # civic_reporter drives a real TinyFish browser run (wallet credit) — only for VERIFIED
+        # reports, and not again if osint_agent's Web Agent already prepared the complaint.
+        if skill_name == "civic_reporter":
+            skip = None
+            if accumulated.get("verdict") and accumulated["verdict"] != "VERIFIED":
+                skip = f"trust verdict is {accumulated['verdict']}, so no civic dispatch"
+            elif accumulated.get("web_agent_outcome") in ("DISPATCH_READY", "AGENT_RUNNING"):
+                skip = "osint_agent's Web Agent already prepared the civic complaint"
+            if skip:
+                steps.append({
+                    "step": step_idx + 1,
+                    "thought": f"Step {step_idx + 1}: skipping civic_reporter — {skip}.",
+                    "routing": routing_mode,
+                    "action": {"skill": skill_name, "kwargs": {}},
+                    "observation": {"skill_name": skill_name, "success": True, "outcome": "SKIPPED", "reason": skip},
+                })
+                continue
+
         # ACT — build kwargs from accumulated context
         skill_kwargs = _build_kwargs(skill_name, accumulated, context)
 
